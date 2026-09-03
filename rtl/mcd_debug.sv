@@ -55,6 +55,10 @@ localparam [28:0] BASE = 29'h07C00000; // byte address 0x3E000000
 
 reg [31:0] as_cnt, exp_rd_cnt, exp_wr_cnt, late_cnt, nodtack_cnt, vs_cnt, hs_cnt, vclk_cnt, prg_cnt, cart_cnt, dl_cnt, reg_wr_cnt;
 reg [15:0] max_lat, lat;
+// trace of the first 32 bus cycles after the CPU leaves reset
+reg [63:0] trace[32];
+reg  [5:0] tr_n;
+reg        cpu_live;
 reg [23:1] last_va;
 reg [15:0] last_vd;
 reg [15:0] last_exp_va_hi;
@@ -64,6 +68,7 @@ reg        old_dl;
 
 always @(posedge clk) begin
 	s_dtack <= {s_dtack[0], mcd_dtack_n};
+	if(~m68k_reset | ~m68k_halt) begin cpu_live <= 0; tr_n <= 0; end else cpu_live <= 1;
 	s_vs    <= {s_vs[0], vs};
 	s_hs    <= {s_hs[0], hs};
 	s_vclk  <= {s_vclk[0], vclk};
@@ -103,6 +108,10 @@ always @(posedge clk) begin
 		if(s_as == 2'b01) begin // /AS rose: end of cycle
 			in_cyc <= 0;
 			last_vd <= vd;
+			if(cpu_live && ~tr_n[5]) begin
+				trace[tr_n[4:0]] <= {last_va, cyc_rw, seen_rom, seen_ras2, seen_fdc, cart_cs, seen_dtack, lat[11:0], vd, 7'd0};
+				tr_n <= tr_n + 1'd1;
+			end
 			if(seen_rom | seen_ras2 | seen_fdc) begin
 				if(cyc_rw) begin
 					exp_rd_cnt <= exp_rd_cnt + 1'd1;
@@ -124,7 +133,7 @@ end
 // periodic record write
 reg [20:0] tick;
 reg [31:0] seq;
-reg  [3:0] idx;
+reg  [5:0] idx;
 reg        busy_w;
 wire [15:0] flags = {locked, m68k_halt, m68k_reset, rom_download, led_g, led_r, mcd_rst_n, rom_cart_mode, region, sys_reset, btn_reset, md_reset, exp_fdc, exp_ras2, exp_rom};
 
@@ -137,7 +146,7 @@ always @(posedge clk) begin
 			idx <= 0;
 			seq <= seq + 1'd1;
 			DDRAM_ADDR <= BASE;
-			DDRAM_BURSTCNT <= 8;
+			DDRAM_BURSTCNT <= 40;
 			DDRAM_BE <= 8'hFF;
 		end
 	end
@@ -152,10 +161,10 @@ always @(posedge clk) begin
 			5: DDRAM_DIN <= {last_va, 1'b0, last_vd, max_lat};
 			6: DDRAM_DIN <= {prg_cnt, cart_cnt};
 			7: DDRAM_DIN <= {vclk_cnt, hs_cnt};
+			default: DDRAM_DIN <= trace[idx[4:0]];
 		endcase
 		idx <= idx + 1'd1;
-		if(idx == 7) busy_w <= 0;
-		if(idx == 7 || idx == 0) ; // keep
+		if(idx == 39) busy_w <= 0;
 	end
 end
 

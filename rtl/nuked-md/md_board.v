@@ -182,14 +182,14 @@ module md_board
 	wire HSYNC;
 	wire HSYNC_pull;
 	//wire M3;
-	reg _M3;
+	reg _M3 = 1'h0;
 	wire NTSC;
 	wire VPA;
 	wire ym_HALT_pull;
 	wire ym_RESET_pull;
 	wire FC0;
 	wire FC1;
-	reg MREQ;
+	reg MREQ = 1'h0;
 	wire ym_MREQ_o;
 	wire ym_MREQ_d;
 	wire SOUND;
@@ -253,7 +253,7 @@ module md_board
 	wire IO;
 	wire IO_o;
 	wire IO_d;
-	reg [15:0] ZA;
+	reg [15:0] ZA = 16'h0;
 	wire [15:0] ym_ZA_o;
 	wire [15:0] ym_ZA_d;
 	wire SRES;
@@ -268,40 +268,40 @@ module md_board
 	wire EDCLK;
 	wire EDCLK_o;
 	wire EDCLK_d;
-	reg [15:0] VD;
+	reg [15:0] VD = 16'h0;
 	wire [15:0] ym_VD_o;
 	wire [15:0] ym_VD_d;
-	reg [22:0] VA;
+	reg [22:0] VA = 23'h0;
 	wire [22:0] ym_VA_o;
 	wire [22:0] ym_VA_d;
 	wire ym_INT_pull;
 	wire ym_BR_pull;
-	reg BGACK;
+	reg BGACK = 1'h0;
 	wire ym_BGACK_pull;
 	wire BG;
 	wire ym_IPL1_pull;
 	wire ym_IPL2_pull;
-	reg IORQ;
-	reg ZRD;
+	reg IORQ = 1'h0;
+	reg ZRD = 1'h0;
 	wire ym_ZRD_o;
 	wire ym_ZRD_d;
-	reg ZWR;
+	reg ZWR = 1'h0;
 	wire ym_ZWR_o;
 	wire ym_ZWR_d;
 	wire M1;
-	reg AS;
+	reg AS = 1'h0;
 	wire ym_AS_o;
 	wire ym_AS_d;
-	reg UDS;
+	reg UDS = 1'h0;
 	wire ym_UDS_o;
 	wire ym_UDS_d;
-	reg LDS;
+	reg LDS = 1'h0;
 	wire ym_LDS_o;
 	wire ym_LDS_d;
-	reg RW;
+	reg RW = 1'h0;
 	wire ym_RW_o;
 	wire ym_RW_d;
-	reg DTACK;
+	reg DTACK = 1'h0;
 	wire ym_DTACK_pull;
 	wire UWR;
 	wire LWR;
@@ -311,11 +311,11 @@ module md_board
 	wire CAS0_o;
 	wire CAS0_d;
 	wire RAS0;
-	reg [7:0] ZD;
+	reg [7:0] ZD = 8'h0;
 	wire [7:0] ym_ZD_o;
 	wire [7:0] ym_ZD_d;
 	
-	reg MCLK_e;
+	reg MCLK_e = 1'h0; // MegaCD: explicit power-up value (simulation would otherwise stay X)
 	
 	always @(posedge MCLK2)
 	begin
@@ -514,7 +514,7 @@ module md_board
 	assign fm_sel23 = TEST0_o;
 	
 	wire [2:0] IPL;
-	reg BR;
+	reg BR = 1'h0;
 	wire BERR;
 	wire m68k_RESET_pull;
 	wire m68k_HALT_pull;
