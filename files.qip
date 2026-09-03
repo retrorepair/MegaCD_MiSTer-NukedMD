@@ -23,6 +23,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/saturn_keyboard.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/md_io.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mcd_cart.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/pcm_mem.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mcd_debug.sv
 set_global_assignment -name VERILOG_FILE rtl/hps_ext.v
 set_global_assignment -name SDC_FILE MegaCD.sdc
 set_global_assignment -name SYSTEMVERILOG_FILE MegaCD.sv

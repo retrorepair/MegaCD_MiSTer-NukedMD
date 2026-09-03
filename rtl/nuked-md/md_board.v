@@ -77,6 +77,8 @@ module md_board
 	output exp_fdwr,          // /FDWR
 	output exp_vclk,          // VCLK
 	output exp_dtack,         // /DTACK as seen on the bus
+	output exp_m68k_reset,    // 68000 /RESET pin level
+	output exp_m68k_halt,     // 68000 /HALT pin level
 	input [15:0] exp_data,    // data driven by the expansion device
 	input exp_data_en,        // expansion device drives the data bus
 	
@@ -928,6 +930,8 @@ module md_board
 	assign exp_fdwr = FDWR;
 	assign exp_vclk = VCLK;
 	assign exp_dtack = DTACK;
+	assign exp_m68k_reset = RESET;
+	assign exp_m68k_halt = HALT;
 	
 	assign SEL1 = 1'h0;
 	

@@ -47,14 +47,8 @@ assign HDMI_BOB_DEINT = 0;
 assign AUDIO_S   = 1;
 assign AUDIO_MIX = status[66:65];
 
-// DDR3 is not used
-assign DDRAM_CLK      = 0;
-assign DDRAM_BURSTCNT = 0;
-assign DDRAM_ADDR     = 0;
-assign DDRAM_RD       = 0;
-assign DDRAM_DIN      = 0;
-assign DDRAM_BE       = 0;
-assign DDRAM_WE       = 0;
+// DDR3: bring-up telemetry only (mcd_debug)
+assign DDRAM_CLK = clk_ram;
 
 wire [1:0] ar = status[50:49];
 
@@ -463,6 +457,7 @@ wire [15:0] cart_data;
 wire        cart_data_en;
 
 wire        exp_as, exp_uds, exp_lds, exp_rw, exp_asel, exp_rom, exp_ras2, exp_fdc, exp_fdwr, exp_vclk, exp_dtack;
+wire        exp_m68k_reset, exp_m68k_halt;
 
 wire        vdp_hclk1;
 wire        vdp_de_h;
@@ -573,6 +568,8 @@ md_board md_board
 	.exp_fdwr(exp_fdwr),
 	.exp_vclk(exp_vclk),
 	.exp_dtack(exp_dtack),
+	.exp_m68k_reset(exp_m68k_reset),
+	.exp_m68k_halt(exp_m68k_halt),
 	.exp_data(MCD_DO),
 	.exp_data_en(exp_data_en),
 
@@ -892,6 +889,22 @@ sdram sdram
 );
 
 ///////////////////////////////////////////////////
+// Bring-up telemetry (test core)
+
+mcd_debug mcd_debug
+(
+	.clk(clk_ram),
+	.exp_as(exp_as), .exp_rw(exp_rw), .exp_rom(exp_rom), .exp_ras2(exp_ras2), .exp_fdc(exp_fdc),
+	.mcd_dtack_n(MCD_DTACK_N), .bus_dtack(exp_dtack),
+	.va(cart_addr), .vd(cart_data_wr), .cart_cs(cart_cs), .cart_oe(cart_oe), .vclk(VCLK), .vs(vs), .hs(hs),
+	.prg_rd(~MCD_PRG_OE_N), .prg_wr(~MCD_PRG_WRL_N | ~MCD_PRG_WRH_N),
+	.md_reset(md_reset), .btn_reset(btn_reset), .sys_reset(sys_reset), .mcd_rst_n(MCD_RST_N),
+	.rom_cart_mode(rom_cart_mode), .region(region), .led_r(MCD_LED_RED), .led_g(MCD_LED_GREEN), .locked(locked),
+	.rom_download(rom_download), .ioctl_wr(ioctl_wr), .m68k_reset(exp_m68k_reset), .m68k_halt(exp_m68k_halt),
+	.DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD), .DDRAM_BUSY(DDRAM_BUSY)
+);
+
+/////////////////////////////////////////////////
 // Audio
 
 wire [15:0] GEN_AUDL;
