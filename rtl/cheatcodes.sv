@@ -82,13 +82,23 @@ always_ff @(posedge clk) begin
 	end
 end
 
+// MegaCD/NukedMD: the address compare is registered. The CPU address is valid for the whole bus
+// cycle, well before the data, so this only removes the 32-way address compare from the
+// combinational data path (it was the worst timing path of the core).
+reg [MAX_CODES-1:0] addr_hit;
+always_ff @(posedge clk) begin
+	int x;
+	for (x = 0; x < MAX_CODES; x = x + 1)
+		addr_hit[x] <= codes[x][ENA_F_S] && codes[x][ADDR_S-:(ADDR_WIDTH-NO_ADDR_LSB)] == addr_in[ADDR_WIDTH-1:NO_ADDR_LSB];
+end
+
 always_comb begin
 	int x;
 	data_out = data_in;
 
 	if (enable) begin
 		for (x = 0; x < MAX_CODES; x = x + 1) begin
-			if (codes[x][ENA_F_S] && codes[x][ADDR_S-:(ADDR_WIDTH-NO_ADDR_LSB)] == addr_in[ADDR_WIDTH-1:NO_ADDR_LSB]) begin
+			if (addr_hit[x]) begin
 				if (!codes[x][COMP_F_S] || (
 					(DATA_WIDTH == 8 || !codes[x][CODE_WIDTH]) ? (data_in       == codes[x][COMP_S-:DATA_WIDTH]) : 
 					(codes[x][ADDR_S-ADDR_WIDTH+1])            ? (data_in[15:8] == codes[x][(COMP_S-DATA_WIDTH+1) +:8]) : 

@@ -52,3 +52,12 @@ upstream tree is kept next to it in `MegaCD_MiSTer-master_ORIG` for diffing.
   M10K budget: 128 blocks, not available).
 - MegaCD.CFG on the MiSTer is from the old core; status bits were kept compatible where the
   option survived, new options sit in bits 60-66.
+
+## Build 1 results (2026-09-04 00:09, deployed as _Console/MegaCD_TEST_NukedMD_20260904.rbf)
+- Fit: 35,663/41,910 ALMs (85%), 553/553 M10K, 56 DSP.
+- Timing (slow 85C): worst setup -3.38ns @107MHz, -1.75ns @53.7MHz.
+  * 107MHz top paths: VD -> CODES (cheat engine, 32-way compare) -> m68k_data. Fixed in
+    cheatcodes.sv by registering the address match (not yet built).
+  * 107MHz next: ym7101 internals / AS -> md_board VD[8] mux (-2.46ns): NukedMD itself.
+  * 53.7MHz: audio_cond psg_iir multiplier (-1.75ns): stock module, consumed at 7MHz ce.
+- TimeQuest helper scripts: sta_paths.tcl / sta_paths2.tcl (quartus_sta -t).
