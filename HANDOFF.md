@@ -101,3 +101,9 @@ Build 6 worst paths (slow corner): all ym7101 mclk_clk3_l -> md_board VD mux / r
 address (-2.6ns), i.e. NukedMD internals as in the MegaDrive core; the Mega CD glue and the
 cheat engine no longer appear. Next timing lever, if ever needed: seed sweep or the
 MegaDrive core's fitter settings are already applied (AGGRESSIVE PERFORMANCE).
+
+## Build 7 (2026-09-04 08:05) — /RAS2 decoded by address window
+Build 6 ran for a while then the main CPU crashed (AS frozen): RAS-only refresh pulses on
+/RAS2 during RAM/VDP cycles (/CAS2 high) passed the CAS-before-RAS rule and became word RAM
+writes of bus garbage. Build 7 qualifies /RAS2 with the word RAM window. Telemetry: word RAM
+accesses ~140k/s, ignored refresh pulses ~65k/s, late=0, CPU running. Timing -1.75ns@107.
