@@ -97,3 +97,7 @@ Cheat engine data path reduced to one compare; timing -2.59ns@107 (TNS -764) / -
 Telemetry identical to build 5 plus the Mega CD green LED asserted by the sub-CPU BIOS.
 Deployed as _Console/MegaCD_TEST_NukedMD_20260904.rbf and in releases/.
 Waiting for the user's visual/CD verdict. Telemetry reader: `python3 /media/fat/mcd_telemetry.py [interval] [count]`.
+Build 6 worst paths (slow corner): all ym7101 mclk_clk3_l -> md_board VD mux / ram_68k
+address (-2.6ns), i.e. NukedMD internals as in the MegaDrive core; the Mega CD glue and the
+cheat engine no longer appear. Next timing lever, if ever needed: seed sweep or the
+MegaDrive core's fitter settings are already applied (AGGRESSIVE PERFORMANCE).
