@@ -144,14 +144,22 @@ begin
 		strobe_z		=> n_strobe_z
 	);
 
-	-- released (high-Z) pins read as pulled up, as md_board does for the main CPU
-	A     <= n_address;
-	DO    <= n_data_o;
-	AS_N  <= '1' when n_strobe_z = '1' else n_as;
-	UDS_N <= '1' when n_strobe_z = '1' else n_uds;
-	LDS_N <= '1' when n_strobe_z = '1' else n_lds;
-	RNW   <= '1' when n_rw_z = '1' else n_rw;
-	FC    <= n_fc or (n_fc_z & n_fc_z & n_fc_z);
+	-- Bus outputs registered in the 53.69 MHz Mega CD domain: the model's pins move on MCLK
+	-- edges while the gate array, CDC and PCM decode them combinationally in the CLK domain;
+	-- one CLK stage (the bus buffers of the real board) gives that decode a full CLK period.
+	-- Released (high-Z) pins read as pulled up, as md_board does for the main CPU.
+	process(CLK)
+	begin
+		if rising_edge(CLK) then
+			A     <= n_address;
+			DO    <= n_data_o;
+			AS_N  <= n_strobe_z or n_as;
+			UDS_N <= n_strobe_z or n_uds;
+			LDS_N <= n_strobe_z or n_lds;
+			RNW   <= n_rw_z or n_rw;
+			FC    <= n_fc or (n_fc_z & n_fc_z & n_fc_z);
+		end if;
+	end process;
 	BG_N  <= n_bg;
 	VMA_N <= '1';
 	RESET_O_N <= not n_reset_pull;
