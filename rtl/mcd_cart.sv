@@ -75,6 +75,7 @@ module mcd_cart
 	input       [7:0] eep_q,
 
 	output            ram_wr,       // battery backed content changed (save pending)
+	output            clearing,     // SRAM clear sweep after a download still running (hold the 68000 in reset)
 
 	// J-Cart
 	input             jcart_en,
@@ -544,27 +545,34 @@ wire [16:0] sram_a = sf_quirk ? {2'b00, cart_addr[15:1]} : {1'b0, cart_addr[16:1
 wire sram_wr_req = cart_lwr & (md_sram_cs | (sf_quirk & sf_sram_en & rom_mode));
 wire ramc_wr_req = cart_lwr & ram_mem_sel & ram_wp[0];
 
-// SRAM clear (FF, or 00 for the Sonic 1 remaster) when a cartridge is loaded
+// SRAM clear (FF, or 00 for the Sonic 1 remaster) when a cartridge is loaded.
+// The SDRAM controller accepts a request on its rising edge only, so every word is a
+// separate pulse: raise the request, wait for the port to finish, drop it for a cycle.
 reg [16:0] clr_addr;
 reg        clr_run;
+reg        clr_req;
 
 always @(posedge clk) begin
 	reg old_dl, old_busy;
 	old_dl <= cart_dl;
 	old_busy <= mem_busy;
-	if(~old_dl & cart_dl) begin clr_run <= 1; clr_addr <= 0; end
-	else if(clr_run & old_busy & ~mem_busy & clr_acc) begin
-		clr_addr <= clr_addr + 1'd1;
-		if(&clr_addr) clr_run <= 0;
+	if(~old_dl & cart_dl) begin clr_run <= 1; clr_addr <= 0; clr_req <= 0; end
+	else if(clr_run & ~cart_dl) begin
+		if(~clr_req & ~mem_busy & ~old_busy) clr_req <= 1;       // issue the next word
+		else if(clr_req & old_busy & ~mem_busy) begin             // accepted and completed
+			clr_req <= 0;
+			clr_addr <= clr_addr + 1'd1;
+			if(&clr_addr) clr_run <= 0;
+		end
 	end
 end
 
 wire clr_wr = clr_run & ~cart_dl;
+assign clearing = clr_run;
 
 assign mem_rd  = rd_req & ~clr_wr;
-assign mem_wrl = clr_wr | sram_wr_req | ramc_wr_req | (rom_we & cart_lwr);
+assign mem_wrl = (clr_wr & clr_req) | sram_wr_req | ramc_wr_req | (rom_we & cart_lwr);
 assign mem_wrh = rom_we & cart_uwr;
-reg clr_acc;
 
 always_comb begin
 	if(clr_wr) begin
@@ -598,7 +606,6 @@ always @(posedge clk) begin
 
 	old_rd   <= rd_req;
 	old_busy <= mem_busy;
-	clr_acc  <= clr_wr & (old_busy | mem_busy); // a clear write was accepted
 
 	if(~old_rd & rd_req) begin
 		rd_pending <= 1;

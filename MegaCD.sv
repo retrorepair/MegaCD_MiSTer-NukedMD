@@ -386,7 +386,8 @@ end
 // Resets and clock enables (same scheme as the MegaDrive HAL)
 
 wire reset   = status[0] | buttons[1] | region_set;
-wire loading = rom_download | bk_loading | RESET;
+wire cart_clearing;
+wire loading = rom_download | bk_loading | RESET | cart_clearing; // the cartridge SRAM clear (~15ms) outlasts the download; keep the 68000 in reset until it is done
 
 reg        btn_reset;
 reg        md_reset;
@@ -858,6 +859,7 @@ mcd_cart cart
 	.eep_q(MCD_BRAM_DI),
 
 	.ram_wr(cart_ram_wr),
+	.clearing(cart_clearing),
 
 	.jcart_en(status[31]),
 	.jcart_data(jcart_data),
