@@ -74,7 +74,7 @@ module mcd_cart
 	output            eep_we,
 	input       [7:0] eep_q,
 
-	output            ram_wr,       // battery backed content changed (save pending)
+	output reg        ram_wr,       // battery backed content changed (save pending)
 	output            clearing,     // SRAM clear sweep after a download still running (hold the 68000 in reset)
 
 	// J-Cart
@@ -600,7 +600,8 @@ always_comb begin
 	end
 end
 
-assign ram_wr = (sram_wr_req | ramc_wr_req | eeprom_ram_we | (pier_quirk & m95_rnw)) & ~clr_wr;
+// registered: consumed by the 53.69 MHz save logic (bk_change); keeps the strobe/decode logic out of that crossing
+always @(posedge clk) ram_wr <= (sram_wr_req | ramc_wr_req | eeprom_ram_we | (pier_quirk & m95_rnw)) & ~clr_wr;
 
 reg       rd_pending;
 reg [1:0] rd_kind; // 0 rom, 1 sram (byte in both halves), 2 sf sram / ram cart (FF:byte)

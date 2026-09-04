@@ -984,6 +984,7 @@ sdram sdram
 ///////////////////////////////////////////////////
 // Bring-up telemetry (test core)
 
+`ifdef MCD_TELEMETRY
 mcd_debug mcd_debug
 (
 	.clk(clk_ram),
@@ -997,6 +998,14 @@ mcd_debug mcd_debug
 	.mcd_do(MCD_DO), .sdram_dout(MCD_ROM_DO), .rom_busy(MCD_ROM_BUSY), .ras2_window(wram_window), .cart_dma(cart_dma), .exp_asel(exp_asel), .dma_rd(dma_rd),
 	.DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD), .DDRAM_BUSY(DDRAM_BUSY)
 );
+`else
+assign DDRAM_BURSTCNT = 0;
+assign DDRAM_ADDR = 0;
+assign DDRAM_DIN = 0;
+assign DDRAM_BE = 0;
+assign DDRAM_WE = 0;
+assign DDRAM_RD = 0;
+`endif
 
 /////////////////////////////////////////////////
 // Audio
