@@ -208,3 +208,28 @@ BIOS and cartridge verified. 36,965 ALMs, 54,281 regs, 519 M10K. Timing: -2.03ns
 -0.42ns@53.7 (TNS -0.5: cart ram_wr strobe -> sav_pending, now registered in mcd_cart).
 mcd_debug is now behind `MCD_TELEMETRY` (set in the test qsf). Seed sweep started: release
 configuration (no telemetry), seeds 2 and 3, in scratchpad copies seed2/ seed3/.
+
+## Seed sweep (release config, no telemetry) and mcd-verificator (2026-09-04 15:20)
+Seeds in scratchpad copies: seed 2 = 36,051 ALMs, -1.92ns@107 (TNS -787), +0.31ns@53.7 (met);
+seed 3 = 36,060 ALMs, -1.92ns@107 (TNS -391), -0.02ns@53.7. The 107 MHz floor at this density
+is the ym7101 clock-gate paths; seed 2 is the release-candidate configuration.
+mcd-verificator (krikzz, V1.02, cartridge mode; ROM in games/MegaCD/mcd-verificator.bin,
+MGL _Console/MegaCD_verificator.mgl) results, expected ranges from jgenesis issue 105:
+  b12 (NukedMD main + FX68K sub): IRQ TEST OK, REG 8030 OK, VAR 22381 err02, COLOR CALC err05,
+      CDC REGS err01, hangs at CDC INIT (upstream core: IRQ 223 err09, 8030 1299 err07 - NukedMD
+      fixed those two).
+  b13/b14/b15 (Nuked sub-CPU): IRQ err0A / 125 err06 / 121 err06 (expected 224-226),
+      REG 8030 1285 err07 (expected 1286-1288), VAR 25808.  -> regression from the sub-CPU
+      wrapper, not from the interface registers.
+A/B bench (scratchpad sim_sub: same program, memory, enables on the FX68K wrapper and the
+Nuked wrapper) showed identical bus cycle (298ns) and loop timing, but the Nuked core's bus
+events sat one 53 MHz clock later relative to the enables: the wrapper rebuilt the CPU clock
+through a register (high one CLK after CE_R) while FX68K acts in the CE_R cycle itself.
+Fix: ASIC exports S68K_CLK = '1' when CLK_CNT is "11" or "00" (level from the phase counter),
+MCD routes it to M68K_WRAP.CLK_LEVEL; bench now shows an integer 3-clock offset (reset
+sequence) only. Build 16 tests it on hardware. Remaining known Mega CD-side inaccuracies
+(from jgenesis' verificator work): CDC decoder interrupt must run at 75Hz with DECEN even
+without sectors (why CDC INIT hangs), transfer-end interrupt when one word is left, FF for
+invalid register reads, no stacking of unacknowledged DECI/DTEI, odd-length DMA rules,
+word RAM 2M-mode sub-CPU halt, COLOR CALC error 05. Main: minimum seek latency (GPGX uses
+12 frames; Thunder Storm FX).

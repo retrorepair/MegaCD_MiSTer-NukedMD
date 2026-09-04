@@ -97,6 +97,7 @@ architecture rtl of MCD is
 	signal S68K_RESET_N	: std_logic;
 	signal S68K_CE_F		: std_logic;
 	signal S68K_CE_R		: std_logic;
+	signal S68K_CLK		: std_logic;
 	
 	signal WORDRAM0_A   	: std_logic_vector(15 downto 0);
 	signal WORDRAM0_DI	: std_logic_vector(15 downto 0);
@@ -221,6 +222,7 @@ begin
 		RESET_I_N	=> S68K_RESET_N,
 		CLKEN_P   	=> S68K_CE_R,
 		CLKEN_N		=> S68K_CE_F,
+		CLK_LEVEL	=> S68K_CLK,
 		A   			=> S68K_A,
 		DI   			=> GENIE_DATA,
 		DO   			=> S68K_DO,
@@ -265,6 +267,7 @@ begin
 		S68K_RESET_N   => S68K_RESET_N,
 		S68K_CE_F  	 	=> S68K_CE_F,
 		S68K_CE_R   	=> S68K_CE_R,
+		S68K_CLK   	=> S68K_CLK,
 		
 		EXT_VA   		=> EXT_VA,
 		EXT_VDI   		=> EXT_VDI,

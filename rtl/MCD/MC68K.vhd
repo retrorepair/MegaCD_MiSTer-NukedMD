@@ -18,8 +18,9 @@ entity M68K_WRAP is
 		RST_N			: in std_logic;
 
 		RESET_I_N	: in std_logic;
-		CLKEN_P 		: in std_logic;
-		CLKEN_N 		: in std_logic;
+		CLKEN_P 		: in std_logic;						-- (FX68K legacy, unused here)
+		CLKEN_N 		: in std_logic;						-- (FX68K legacy, unused here)
+		CLK_LEVEL	: in std_logic;						-- 12.5 MHz CPU clock level from the gate array phase counter
 		A   			: out std_logic_vector(23 downto 1);
 		DI				: in std_logic_vector(15 downto 0);
 		DO				: out std_logic_vector(15 downto 0);
@@ -96,17 +97,11 @@ architecture rtl of M68K_WRAP is
 
 begin
 
-	-- 12.5 MHz CLK level from the clock generator's edge enables
-	process(CLK)
-	begin
-		if rising_edge(CLK) then
-			if CLKEN_P = '1' then
-				cpu_clk <= '1';
-			elsif CLKEN_N = '1' then
-				cpu_clk <= '0';
-			end if;
-		end if;
-	end process;
+	-- 12.5 MHz CLK level straight from the gate array's phase counter (high during the same
+	-- CLK cycles in which FX68K ran its PHI1 actions). Rebuilding it from the edge enables
+	-- would put every CPU clock edge one CLK (18.6 ns) late against the gate array's own
+	-- enable-timed DTACK and strobe sampling.
+	cpu_clk <= CLK_LEVEL;
 
 	-- A 68000 only resets with /RESET and /HALT low together; the board's sub-CPU reset
 	-- (gate array SRES) drives both lines. FX68K did this internally (extReset).

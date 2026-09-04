@@ -27,6 +27,7 @@ entity ASIC is
 		S68K_RESET_N	: out std_logic;
 		S68K_CE_F		: out std_logic;
 		S68K_CE_R		: out std_logic;
+		S68K_CLK		: out std_logic;	-- sub-CPU clock level (high from the R enable to the F enable), for the gate-level 68000
 		
 		EXT_VA   		: in std_logic_vector(17 downto 1);
 		EXT_VDI			: in std_logic_vector(15 downto 0);
@@ -2497,6 +2498,7 @@ begin
 				  
 	S68K_CE_F <= CLK_12M_F;
 	S68K_CE_R <= CLK_12M_R;
+	S68K_CLK <= '1' when CLK_CNT = "11" or CLK_CNT = "00" else '0';
 	S68K_HALT_N <= not (GEN_S68K_HALT or PCM_S68K_HALT or S68K_HALT);
 	S68K_RESET_N <= SRES;
 	S68K_VPA_N <= INT_VPA_N;
