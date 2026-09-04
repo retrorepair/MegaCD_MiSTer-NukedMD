@@ -20,13 +20,13 @@ def show(w):
     seq = w[1] >> 32; flags = w[1] & 0xFFFF
     vs, as_ = w[2] >> 32, w[2] & 0xFFFFFFFF
     exp_rd, late = w[3] >> 32, w[3] & 0xFFFFFFFF
-    nodtack, exp_wr = w[4] >> 32, w[4] & 0xFFFFFFFF
+    ras2_ign, ras2_acc = w[4] >> 32, w[4] & 0xFFFFFFFF
     last_va = (w[5] >> 32) & 0xFFFFFF; last_vd = (w[5] >> 16) & 0xFFFF; max_lat = w[5] & 0xFFFF
     prg, cart = w[6] >> 32, w[6] & 0xFFFFFFFF
     vclk, dl = w[7] >> 32, w[7] & 0xFFFFFFFF
     fl = ' '.join(n for i, n in enumerate(FLAGS) if flags & (1 << i))
-    print('seq=%d vs=%d dl_words=%d vclk=%d AS=%d expRD=%d expWR=%d late=%d nodtack=%d maxlat=%d(x9.3ns) prg=%d cart=%d lastVA=%06X lastVD=%04X [%s]'
-          % (seq, vs, dl, vclk, as_, exp_rd, exp_wr, late, nodtack, max_lat, prg, cart, last_va, last_vd, fl))
+    print('seq=%d vs=%d dl_words=%d vclk=%d AS=%d expRD=%d ras2acc=%d late=%d ras2ign=%d maxlat=%d(x9.3ns) prg=%d cart=%d lastVA=%06X lastVD=%04X [%s]'
+          % (seq, vs, dl, vclk, as_, exp_rd, ras2_acc, late, ras2_ign, max_lat, prg, cart, last_va, last_vd, fl))
     for i in range(16):
         a = w[8 + 2*i]; b = w[9 + 2*i]
         if a == 0 and b == 0: continue

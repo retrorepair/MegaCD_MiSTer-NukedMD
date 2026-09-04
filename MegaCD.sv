@@ -660,17 +660,19 @@ dpram #(13,8) ram_z80k
 wire        ext_dtack   = ~MCD_DTACK_N;              // the gate array asserts /DTACK on the bus
 wire        exp_data_en = ~MCD_DTACK_N & exp_rw;     // and drives the data bus for reads
 
-// /RAS2 is a DRAM row strobe: the arbiter also pulses it (CAS-before-RAS, with /CAS2 already
-// low) to refresh the expansion DRAM, in the middle of unrelated CPU cycles. Only a
-// RAS-before-CAS cycle is a word RAM access; the gate array VHDL expects an address-decode
-// style select, so it gets one that is set when /RAS2 falls with /CAS2 high and held to
-// the end of the bus cycle.
-reg exp_ras2_acc;
+// /RAS2 is a DRAM row strobe. Besides word RAM accesses the arbiter pulses it to refresh the
+// expansion DRAM: CAS-before-RAS inside refresh-marked cycles and RAS-only (row address =
+// whatever is on the bus) during ordinary RAM/VDP cycles. The gate array VHDL expects an
+// address-decode style select, so the pulse is qualified with the word RAM window
+// (200000-3FFFFF, or 600000-7FFFFF with a cartridge in the slot) and held to the end of
+// the bus cycle. A refresh pulse that lands inside the window coincides with a real access.
+wire wram_window = ~cart_addr[23] & (cart_addr[22] == rom_cart_mode) & cart_addr[21];
+reg  exp_ras2_acc;
 always @(posedge clk_md) begin
 	reg old_ras2;
 	old_ras2 <= exp_ras2;
 	if(exp_as) exp_ras2_acc <= 0;
-	else if(old_ras2 & ~exp_ras2 & ~cart_cas2) exp_ras2_acc <= 1;
+	else if(old_ras2 & ~exp_ras2 & wram_window) exp_ras2_acc <= 1;
 end
 
 ///////////////////////////////////////////////////
@@ -915,7 +917,7 @@ mcd_debug mcd_debug
 	.md_reset(md_reset), .btn_reset(btn_reset), .sys_reset(sys_reset), .mcd_rst_n(MCD_RST_N),
 	.rom_cart_mode(rom_cart_mode), .region(region), .led_r(MCD_LED_RED), .led_g(MCD_LED_GREEN), .locked(locked),
 	.rom_download(rom_download), .ioctl_wr(ioctl_wr), .m68k_reset(exp_m68k_reset), .m68k_halt(exp_m68k_halt),
-	.mcd_do(MCD_DO), .sdram_dout(MCD_ROM_DO), .rom_busy(MCD_ROM_BUSY),
+	.mcd_do(MCD_DO), .sdram_dout(MCD_ROM_DO), .rom_busy(MCD_ROM_BUSY), .ras2_window(wram_window),
 	.DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD), .DDRAM_BUSY(DDRAM_BUSY)
 );
 

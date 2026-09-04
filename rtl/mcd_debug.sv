@@ -41,6 +41,7 @@ module mcd_debug
 	input      [15:0] mcd_do,       // gate array data out (EXT_VDO)
 	input      [15:0] sdram_dout,   // SDRAM controller data
 	input             rom_busy,     // SDRAM port 1 busy
+	input             ras2_window,  // address inside the word RAM window
 
 	// DDR3
 	output reg  [7:0] DDRAM_BURSTCNT,
@@ -56,7 +57,7 @@ assign DDRAM_RD = 0;
 
 localparam [28:0] BASE = 29'h07C00000; // byte address 0x3E000000
 
-reg [31:0] as_cnt, exp_rd_cnt, exp_wr_cnt, late_cnt, nodtack_cnt, vs_cnt, hs_cnt, vclk_cnt, prg_cnt, cart_cnt, dl_cnt, reg_wr_cnt;
+reg [31:0] as_cnt, exp_rd_cnt, exp_wr_cnt, late_cnt, nodtack_cnt, ras2_acc_cnt, ras2_ign_cnt, vs_cnt, hs_cnt, vclk_cnt, prg_cnt, cart_cnt, dl_cnt, reg_wr_cnt;
 reg [15:0] max_lat, lat;
 reg [11:0] lat_dtack, lat_busy;
 reg        seen_busy;
@@ -69,6 +70,7 @@ reg [23:1] last_va;
 reg [15:0] last_vd;
 reg [15:0] last_exp_va_hi;
 reg        in_cyc, seen_dtack, seen_rom, seen_ras2, seen_fdc, cyc_rw;
+reg [1:0]  s_ras2;
 reg [1:0]  s_dtack, s_vs, s_hs, s_vclk, s_prg_rd, s_prg_wr, s_oe, s_as;
 reg        old_dl;
 
@@ -83,6 +85,8 @@ always @(posedge clk) begin
 	s_oe    <= {s_oe[0], cart_oe & cart_cs};
 	s_as    <= {s_as[0], exp_as};
 	s_busy  <= {s_busy[0], rom_busy};
+	if(s_ras2 == 2'b10) begin if(ras2_window) ras2_acc_cnt <= ras2_acc_cnt + 1'd1; else ras2_ign_cnt <= ras2_ign_cnt + 1'd1; end
+	s_ras2 <= {s_ras2[0], exp_ras2};
 
 	if(s_vs == 2'b01) vs_cnt <= vs_cnt + 1'd1;
 	if(s_hs == 2'b01) hs_cnt <= hs_cnt + 1'd1;
@@ -166,7 +170,7 @@ always @(posedge clk) begin
 			1: DDRAM_DIN <= {seq, 16'd0, flags};
 			2: DDRAM_DIN <= {vs_cnt, as_cnt};
 			3: DDRAM_DIN <= {exp_rd_cnt, late_cnt};
-			4: DDRAM_DIN <= {nodtack_cnt, exp_wr_cnt};
+			4: DDRAM_DIN <= {ras2_ign_cnt, ras2_acc_cnt};
 			5: DDRAM_DIN <= {last_va, 1'b0, last_vd, max_lat};
 			6: DDRAM_DIN <= {prg_cnt, cart_cnt};
 			7: DDRAM_DIN <= {vclk_cnt, dl_cnt};
