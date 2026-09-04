@@ -119,6 +119,7 @@ Slack history:
 | 16 | 37,288 (89%) | 519 | | | sub-CPU clock level from the gate array phase counter |
 | 17 | 37,309 (89%) | 519 | | | Mega CD at 12.5 MHz (50 MHz enable), timer divider 384, CDC 75 Hz decoder frame |
 | 18 | 37,082 (88%) | 519 | -2.37 | -0.91 | direct sub-CPU bus outputs (DTACK window parity with FX68K) |
+| 20 | 37,136 (89%) | 519 | | | PRG-RAM read DTACK at SDRAM acceptance: VAR test passes |
 
 ## Bring-up numbers from the hardware telemetry
 
@@ -134,13 +135,13 @@ Slack history:
 Expected ranges from real hardware (jgenesis issue 105); real model-2 hardware also fails
 CDC REGS 01 (5-bit register index is a CDX trait) and the CDC INIT step needs a mounted disc.
 
-| Test | Expected | Upstream MegaCD | Build 12 (FX68K sub) | Build 17 | Build 18 |
-|---|---|---|---|---|---|
-| COLOR CALC | OK | ERR 05 | ERR 05 | ERR 05 | ERR 05 |
-| VAR TESTS (sub-CPU memory loop) | 23753-23980 | 22744 | 22381 | 27906 | 26742 |
-| IRQ TEST (128 back-to-back INT2) | 128 handled, 224-226 | 223 (ERR 09) | OK | 106 (ERR 06) | 122 (ERR 06) |
-| REG 8030 (timer vs sub-CPU) | 1286-1288 | 1299 (ERR 07) | OK | OK | OK |
-| REG X000/X002/2006/X00C, PROG/WORD RAM, WRAM PMOD | OK | OK | OK | OK | OK |
+| Test | Expected | Upstream MegaCD | Build 12 (FX68K sub) | Build 17 | Build 18 | Build 20 |
+|---|---|---|---|---|---|---|
+| COLOR CALC | OK | ERR 05 | ERR 05 | ERR 05 | ERR 05 | ERR 05 |
+| VAR TESTS (sub-CPU memory loop) | 23753-23980 | 22744 | 22381 | 27906 | 26742 | OK |
+| IRQ TEST (128 back-to-back INT2) | 128 handled, 224-226 | 223 (ERR 09) | OK | 106 (ERR 06) | 122 (ERR 06) | ERR 0A (128/128 and 224-226 pass) |
+| REG 8030 (timer vs sub-CPU) | 1286-1288 | 1299 (ERR 07) | OK | OK | OK | OK |
+| REG X000/X002/2006/X00C, PROG/WORD RAM, WRAM PMOD | OK | OK | OK | OK | OK | OK |
 
 Builds 12 and earlier ran the Mega CD block at 13.42 MHz (see HANDOFF); from build 17 it runs
 at 12.5 MHz, which is why the VAR count rose before the sub-CPU bus path was corrected.

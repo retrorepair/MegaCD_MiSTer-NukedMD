@@ -285,3 +285,11 @@ expected count corresponds to ~0 wait states (18.7 clocks per 4-access loop iter
 Build 20: ASIC asserts the sub-CPU PRG-RAM read DTACK when the SDRAM controller accepts the
 request (PRG_RDY falls) instead of when the data is back; data then arrives deterministically
 ~60 ns later, inside the 80 ns the CPU waits between sampling DTACK and latching data.
+
+## Build 20 (2026-09-04 18:50) — VAR TESTS pass
+Verificator: VAR OK (was 26742 err02), REG 8030 OK, IRQ err0A (sub-tests 06/08/09 now pass:
+128/128 handled, 1024 requests with 224-226 timer ticks; 0A wants INT2 answered within ~6
+NOPs of the main CPU incl. exception stacking), BIOS boots. Telemetry: PRG-RAM AS->DTACK avg
+44-55 ns (was 99-105), word RAM 25 ns in the loop / 100 ns idle, regs 24-30 ns.
+Next (build 21): post PRG-RAM writes (DTACK at issue) - the stack pushes of the exception
+entry are the remaining wait states in the 0A window.
