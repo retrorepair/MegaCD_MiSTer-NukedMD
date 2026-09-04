@@ -42,6 +42,9 @@ module mcd_debug
 	input      [15:0] sdram_dout,   // SDRAM controller data
 	input             rom_busy,     // SDRAM port 1 busy
 	input             ras2_window,  // address inside the word RAM window
+	input             cart_dma,     // VDP DMA in progress (BGACK)
+	input             exp_asel,     // /ASEL
+	input             dma_rd,       // VDP DMA read strobe on the expansion (cart_dma & cart_oe)
 
 	// DDR3
 	output reg  [7:0] DDRAM_BURSTCNT,
@@ -69,8 +72,8 @@ reg        cpu_live;
 reg [23:1] last_va;
 reg [15:0] last_vd;
 reg [15:0] last_exp_va_hi;
-reg        in_cyc, seen_dtack, seen_rom, seen_ras2, seen_fdc, cyc_rw;
-reg [1:0]  s_ras2;
+reg        in_cyc, seen_dtack, seen_rom, seen_ras2, seen_fdc, cyc_rw, cyc_dma, seen_asel;
+reg [1:0]  s_ras2, s_dma;
 reg [1:0]  s_dtack, s_vs, s_hs, s_vclk, s_prg_rd, s_prg_wr, s_oe, s_as;
 reg        old_dl;
 
@@ -85,6 +88,7 @@ always @(posedge clk) begin
 	s_oe    <= {s_oe[0], cart_oe & cart_cs};
 	s_as    <= {s_as[0], exp_as};
 	s_busy  <= {s_busy[0], rom_busy};
+	s_dma   <= {s_dma[0], dma_rd};
 	if(s_ras2 == 2'b10) begin if(ras2_window) ras2_acc_cnt <= ras2_acc_cnt + 1'd1; else ras2_ign_cnt <= ras2_ign_cnt + 1'd1; end
 	s_ras2 <= {s_ras2[0], exp_ras2};
 
@@ -99,11 +103,12 @@ always @(posedge clk) begin
 	if(~old_dl & rom_download) dl_cnt <= 0;
 
 	// expansion bus cycle tracking
-	if(s_as == 2'b10) begin // /AS fell
+	if((s_as == 2'b10 & ~cart_dma) | (s_dma == 2'b01)) begin // /AS fell (CPU) or DMA read strobe rose
 		in_cyc <= 1;
 		as_cnt <= as_cnt + 1'd1;
 		seen_dtack <= 0; seen_rom <= 0; seen_ras2 <= 0; seen_fdc <= 0; seen_busy <= 0; lat_dtack <= 0; lat_busy <= 0;
 		cyc_rw <= exp_rw;
+		cyc_dma <= cart_dma | (s_dma == 2'b01); seen_asel <= 0;
 		lat <= 0;
 		last_va <= va;
 	end
@@ -112,16 +117,17 @@ always @(posedge clk) begin
 		if(~exp_rom)  seen_rom  <= 1;
 		if(~exp_ras2) seen_ras2 <= 1;
 		if(~exp_fdc)  seen_fdc  <= 1;
+		if(~exp_asel) seen_asel <= 1;
 		if(~s_dtack[1] & ~seen_dtack) begin
 			seen_dtack <= 1; lat_dtack <= lat[11:0];
 			if(lat > max_lat) max_lat <= lat;
 		end
 		if(s_busy == 2'b10 && ~seen_busy) begin seen_busy <= 1; lat_busy <= lat[11:0]; end
-		if(s_as == 2'b01) begin // /AS rose: end of cycle
+		if((s_as == 2'b01 & ~cyc_dma) | (s_dma == 2'b10 & cyc_dma)) begin // /AS rose (CPU) or DMA strobe fell: end of cycle
 			in_cyc <= 0;
 			last_vd <= vd;
-			if(cpu_live && ~tr_n[4]) begin
-				trace[{tr_n[3:0],1'b0}] <= {last_va, cyc_rw, seen_rom, seen_ras2, seen_fdc, cart_cs, seen_dtack, lat_dtack, vd, 6'd0, seen_busy};
+			if(cpu_live && (cyc_dma | cart_dma) && ~tr_n[4]) begin // DMA cycles only
+				trace[{tr_n[3:0],1'b0}] <= {last_va, cyc_rw, seen_rom, seen_ras2, seen_fdc, cart_cs, seen_dtack, lat_dtack, vd, 4'd0, seen_asel, cyc_dma, seen_busy};
 				trace[{tr_n[3:0],1'b1}] <= {mcd_do, sdram_dout, lat_busy, lat[11:0], 8'd0};
 				tr_n <= tr_n + 1'd1;
 			end

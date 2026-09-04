@@ -667,13 +667,17 @@ wire        exp_data_en = ~MCD_DTACK_N & exp_rw;     // and drives the data bus 
 // (200000-3FFFFF, or 600000-7FFFFF with a cartridge in the slot) and held to the end of
 // the bus cycle. A refresh pulse that lands inside the window coincides with a real access.
 wire wram_window = ~cart_addr[23] & (cart_addr[22] == rom_cart_mode) & cart_addr[21];
-reg  exp_ras2_acc;
-always @(posedge clk_md) begin
-	reg old_ras2;
-	old_ras2 <= exp_ras2;
-	if(exp_as) exp_ras2_acc <= 0;
-	else if(old_ras2 & ~exp_ras2 & wram_window) exp_ras2_acc <= 1;
-end
+wire exp_ras2_acc = ~exp_ras2 & wram_window;   // level: /RAS2 stays low for a whole VDP DMA burst
+
+// VDP DMA from the expansion: the arbiter drives /AS, /UDS, /LDS inactive and the VDP reads
+// word by word with CAS0 (md_board exports its early version as cart_oe) while /ROM or
+// /RAS2 stay asserted for the burst. fpgagen's bus model presented DMA reads to the gate
+// array as ordinary word reads (strobes + select), so that is synthesised here: the select
+// and both data strobes follow the CAS0 strobe while DMA is active.
+wire dma_rd    = cart_dma & cart_oe;
+wire ext_sel_n = exp_as & ~dma_rd;
+wire ext_uds_n = exp_uds & ~dma_rd;
+wire ext_lds_n = exp_lds & ~dma_rd;
 
 ///////////////////////////////////////////////////
 // Mega CD
@@ -732,10 +736,10 @@ MCD MCD
 	.EXT_VDO(MCD_DO),
 	.EXT_AS_N(exp_as),
 	.EXT_RNW(exp_rw),
-	.EXT_LDS_N(exp_lds),
-	.EXT_UDS_N(exp_uds),
+	.EXT_LDS_N(ext_lds_n),
+	.EXT_UDS_N(ext_uds_n),
 	.EXT_DTACK_N(MCD_DTACK_N),
-	.EXT_ASEL_N(exp_as),
+	.EXT_ASEL_N(ext_sel_n),
 	.EXT_VCLK_CE(1'b0),
 	.EXT_RAS2_N(~exp_ras2_acc),
 	.EXT_ROM_N(exp_rom),
@@ -917,7 +921,7 @@ mcd_debug mcd_debug
 	.md_reset(md_reset), .btn_reset(btn_reset), .sys_reset(sys_reset), .mcd_rst_n(MCD_RST_N),
 	.rom_cart_mode(rom_cart_mode), .region(region), .led_r(MCD_LED_RED), .led_g(MCD_LED_GREEN), .locked(locked),
 	.rom_download(rom_download), .ioctl_wr(ioctl_wr), .m68k_reset(exp_m68k_reset), .m68k_halt(exp_m68k_halt),
-	.mcd_do(MCD_DO), .sdram_dout(MCD_ROM_DO), .rom_busy(MCD_ROM_BUSY), .ras2_window(wram_window),
+	.mcd_do(MCD_DO), .sdram_dout(MCD_ROM_DO), .rom_busy(MCD_ROM_BUSY), .ras2_window(wram_window), .cart_dma(cart_dma), .exp_asel(exp_asel), .dma_rd(dma_rd),
 	.DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD), .DDRAM_BUSY(DDRAM_BUSY)
 );
 
