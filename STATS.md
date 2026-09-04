@@ -1,8 +1,8 @@
 # Resource and timing statistics
 
 Device: Cyclone V 5CSEBA6U23I7 (DE10-Nano). Quartus Prime 17.0.2 Lite, fitter effort
-"AGGRESSIVE PERFORMANCE". Figures below are from build 14 (2026-09-04, commit 616d700) unless
-stated. Cyclone V has no "LEs": its logic unit is the ALM (Adaptive Logic Module, two
+"AGGRESSIVE PERFORMANCE". Device totals and the entity table are from build 14 (2026-09-04, commit 616d700); the
+timing table is from build 15 (commit 32b7afa: 36,965 ALMs, 54,281 registers, 519 M10K). Cyclone V has no "LEs": its logic unit is the ALM (Adaptive Logic Module, two
 combinational ALUTs plus four registers); the equivalent-LE view is the ALUT and register
 counts.
 
@@ -84,23 +84,23 @@ In-System Memory Content Editor hook (`ENABLE_RUNTIME_MOD=YES`) that forced ever
 RAM into bidirectional mode (max 16 bits per block), costing 13 blocks per VRAM bank instead
 of 7; removing it also deleted the JTAG hub logic.
 
-## Timing (slow 1100 mV 85 C corner, build 14)
+## Timing (slow 1100 mV 85 C corner, build 15)
 
 | Clock | Period | Worst setup slack | TNS | Equivalent Fmax | Hold |
 |---|---|---|---|---|---|
-| 107.386 MHz (MCLK2: board model, both 68000s, SDRAM, cartridge) | 9.31 ns | -2.22 ns | -967 ns | 86.7 MHz | +0.25 ns |
-| 53.693 MHz (Mega CD block, audio, video) | 18.62 ns | -2.47 ns (false, see below) | -74 ns | 47.4 MHz | +0.25 ns |
+| 107.386 MHz (MCLK2: board model, both 68000s, SDRAM, cartridge) | 9.31 ns | -2.03 ns | -2153 ns | 88.1 MHz | +0.25 ns |
+| 53.693 MHz (Mega CD block, audio, video) | 18.62 ns | -0.42 ns | -0.5 ns | 52.5 MHz | +0.25 ns |
 
-The 53.7 MHz worst paths in build 14 are all inside the PSG IIR filter, whose registers only
-update on a 7.056 MHz enable (so those paths really have seven clocks); the SDC now carries a
-multicycle constraint for it. With that applied the true worst 53.7 MHz path is the Nuked
-sub-CPU's address/strobe registers into the PCM register decode at -1.77 ns, addressed in
-build 15 by registering the sub-CPU bus outputs in the 53 MHz domain.
+In build 15 the 53.7 MHz domain is essentially clean (worst -0.42 ns, TNS -0.5 ns; the last
+paths were the cartridge save strobe into the save logic, registered afterwards). Build 14 had
+reported -2.47 ns there, all inside the PSG IIR filter, which is a false path: every register in
+that module updates only on a 7.056 MHz enable, so those paths really have seven clocks; the SDC
+now carries a multicycle constraint for it.
 
-The 107 MHz worst paths are NukedMD board-level: VDP internal clock gating into the VD bus
-mux (-2.22), the reset fan-out into the VD mux (-2.13), VDP DMA address into the 68000 RAM
-(-2.04), the M3 mode register. These exist in the MegaDrive core too and depend on placement
-density; this core fills 99% of the LABs.
+The 107 MHz worst paths (build 15) are all inside the NukedMD VDP (ym7101): its internal clock
+gate (mclk_and1) into the sl_hit latches and the cnt_sa_low counters (-2.03), then the VDP DMA
+address and the reset fan-out into the VD bus mux (-1.95). These exist in the MegaDrive core too
+and depend on placement density; this core fills 99% of the LABs.
 
 Slack history:
 
@@ -115,6 +115,7 @@ Slack history:
 | 12 | 37,158 (89%) | 553 | -2.68 | -1.90 | TMSS (MLAB ROM) |
 | 13 | 36,502 (87%) | 519 | -1.92 | -2.32 | Nuked 68000 sub-CPU, RAM hook removed |
 | 14 | 36,992 (88%) | 519 | -2.22 | -2.47* | registered MCD interface (*false PSG paths) |
+| 15 | 36,965 (88%) | 519 | -2.03 | -0.42 | registered sub-CPU outputs, PSG multicycle; 53.7 MHz TNS -0.5 ns |
 
 ## Bring-up numbers from the hardware telemetry
 

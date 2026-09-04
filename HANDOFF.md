@@ -201,3 +201,10 @@ false path: every register in sys/iir_filter.v is written under `if (ce)` (7.056
 register-to-register paths inside it span >= 7 clocks. Added a multicycle (setup 4 / hold 3)
 for psg_iir in MegaCD.sdc. sta_paths.tcl now also writes worst_paths_107.txt /
 worst_paths_53.txt per clock. User reports no audible distortion on build 13 (was on 12).
+
+## Build 15 (2026-09-04 14:40) — 53.7 MHz domain clean
+BIOS and cartridge verified. 36,965 ALMs, 54,281 regs, 519 M10K. Timing: -2.03ns@107 (TNS
+-2153, all ym7101-internal: mclk_and1 -> sl_hit / cnt_sa_low, io_address -> VD),
+-0.42ns@53.7 (TNS -0.5: cart ram_wr strobe -> sav_pending, now registered in mcd_cart).
+mcd_debug is now behind `MCD_TELEMETRY` (set in the test qsf). Seed sweep started: release
+configuration (no telemetry), seeds 2 and 3, in scratchpad copies seed2/ seed3/.
