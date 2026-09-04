@@ -91,3 +91,9 @@ Not yet exercised on hardware: CD boot (CDC/CDDA path unchanged from upstream), 
 (wave RAM now in SDRAM via pcm_mem.sv), RAM cart save/load, ROM cart / Pier Solar.
 The telemetry block (mcd_debug.sv) is still in the build; drop it from files.qip and the
 DDRAM assigns in MegaCD.sv for a release build.
+
+## Build 6 (2026-09-04 03:40) — deployed, boots
+Cheat engine data path reduced to one compare; timing -2.59ns@107 (TNS -764) / -1.7ns@53.7.
+Telemetry identical to build 5 plus the Mega CD green LED asserted by the sub-CPU BIOS.
+Deployed as _Console/MegaCD_TEST_NukedMD_20260904.rbf and in releases/.
+Waiting for the user's visual/CD verdict. Telemetry reader: `python3 /media/fat/mcd_telemetry.py [interval] [count]`.
