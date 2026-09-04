@@ -80,3 +80,14 @@ word-RAM data priority over ROM data, and the FC1004 arbiter pulses /RAS2 (CAS-b
 ASIC treated every /RAS2 low as a word RAM access -> zeros won. fpgagen's /RAS2 was a pure
 address decode, so this never happened before. Fix (MegaCD.sv): word RAM select is set only
 when /RAS2 falls with /CAS2 high, held to the end of the bus cycle (exp_ras2_acc). Build 5.
+
+## Build 5 (2026-09-04 02:55) — BIOS boots
+Telemetry after the /RAS2 fix: every traced fetch matches the SDRAM word, late=0, main CPU
+~1.1M BIOS fetches/s, sub CPU >100M PRG-RAM accesses, RAM-cart probes, VDP polling loops.
+Fit 36,886 ALMs (88%), 553/553 M10K; timing -2.9ns@107 / -1.4ns@53.7 (slow corner).
+`nodtack` grows ~16k/s: those are the raw /RAS2 refresh pulses the telemetry still counts
+as expansion reads (classification only; the gate array ignores them now).
+Not yet exercised on hardware: CD boot (CDC/CDDA path unchanged from upstream), PCM audio
+(wave RAM now in SDRAM via pcm_mem.sv), RAM cart save/load, ROM cart / Pier Solar.
+The telemetry block (mcd_debug.sv) is still in the build; drop it from files.qip and the
+DDRAM assigns in MegaCD.sv for a release build.
