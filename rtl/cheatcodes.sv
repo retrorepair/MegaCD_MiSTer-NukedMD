@@ -82,33 +82,35 @@ always_ff @(posedge clk) begin
 	end
 end
 
-// MegaCD/NukedMD: the address compare is registered. The CPU address is valid for the whole bus
-// cycle, well before the data, so this only removes the 32-way address compare from the
-// combinational data path (it was the worst timing path of the core).
+// MegaCD/NukedMD: address match and code selection are registered (the CPU address is valid
+// for the whole bus cycle, long before the data), so only one data compare and one mux
+// remain on the combinational data path. It was the worst timing path of the core.
 reg [MAX_CODES-1:0] addr_hit;
+reg [ENA_F_S:0]     hit_code;
+reg                 hit_any;
 always_ff @(posedge clk) begin
 	int x;
+	reg [ENA_F_S:0] acc;
 	for (x = 0; x < MAX_CODES; x = x + 1)
 		addr_hit[x] <= codes[x][ENA_F_S] && codes[x][ADDR_S-:(ADDR_WIDTH-NO_ADDR_LSB)] == addr_in[ADDR_WIDTH-1:NO_ADDR_LSB];
+	acc = '0;
+	for (x = 0; x < MAX_CODES; x = x + 1) if (addr_hit[x]) acc = acc | codes[x];
+	hit_code <= acc;
+	hit_any  <= |addr_hit;
 end
 
 always_comb begin
-	int x;
 	data_out = data_in;
 
-	if (enable) begin
-		for (x = 0; x < MAX_CODES; x = x + 1) begin
-			if (addr_hit[x]) begin
-				if (!codes[x][COMP_F_S] || (
-					(DATA_WIDTH == 8 || !codes[x][CODE_WIDTH]) ? (data_in       == codes[x][COMP_S-:DATA_WIDTH]) : 
-					(codes[x][ADDR_S-ADDR_WIDTH+1])            ? (data_in[15:8] == codes[x][(COMP_S-DATA_WIDTH+1) +:8]) : 
-					                                             (data_in[7:0]  == codes[x][(COMP_S-DATA_WIDTH+1) +:8]) ))
-				begin
-					if(DATA_WIDTH == 8 || !codes[x][CODE_WIDTH])  data_out       = codes[x][DATA_S-:DATA_WIDTH];
-					else if (codes[x][ADDR_S-ADDR_WIDTH+1])       data_out[15:8] = codes[x][(DATA_S-DATA_WIDTH+1) +:8];
-					else                                          data_out[7:0]  = codes[x][(DATA_S-DATA_WIDTH+1) +:8];
-				end
-			end
+	if (enable && hit_any) begin
+		if (!hit_code[COMP_F_S] || (
+			(DATA_WIDTH == 8 || !hit_code[CODE_WIDTH]) ? (data_in       == hit_code[COMP_S-:DATA_WIDTH]) :
+			(hit_code[ADDR_S-ADDR_WIDTH+1])            ? (data_in[15:8] == hit_code[(COMP_S-DATA_WIDTH+1) +:8]) :
+			                                             (data_in[7:0]  == hit_code[(COMP_S-DATA_WIDTH+1) +:8]) ))
+		begin
+			if(DATA_WIDTH == 8 || !hit_code[CODE_WIDTH])  data_out       = hit_code[DATA_S-:DATA_WIDTH];
+			else if (hit_code[ADDR_S-ADDR_WIDTH+1])       data_out[15:8] = hit_code[(DATA_S-DATA_WIDTH+1) +:8];
+			else                                          data_out[7:0]  = hit_code[(DATA_S-DATA_WIDTH+1) +:8];
 		end
 	end
 end
