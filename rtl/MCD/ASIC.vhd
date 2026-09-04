@@ -1432,6 +1432,12 @@ begin
 								PRG_RAM_WRL <= not S68K_LDS_N and not S68K_RNW;
 								PRG_RAM_WRH <= not S68K_UDS_N and not S68K_RNW;
 								PRG_RAM_RD <= S68K_RNW;
+								-- Writes are posted: address and data are latched here, so the CPU can be
+								-- acknowledged at once (real PRG-RAM takes writes without wait states); the
+								-- next PRG-RAM access still waits for this one to reach the SDRAM controller.
+								if S68K_RNW = '0' then
+									S68K_PRGRAM_DTACK_N <= '0';
+								end if;
 								PRSS <= PRS_WAIT;
 							else 
 								PRG_RAM_WRL <= '0';
