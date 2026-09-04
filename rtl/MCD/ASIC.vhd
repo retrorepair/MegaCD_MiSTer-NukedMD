@@ -1404,6 +1404,12 @@ begin
 					when others => null;
 				end case;
 				
+				-- DTACK follows the CPU's strobes in every state: with posted writes and the early read
+				-- acknowledge the CPU can end its cycle before the SDRAM transfer is over, and a DTACK
+				-- left asserted would terminate its next bus cycle at once (build 21 BIOS corruption).
+				if S68K_PRGRAM_DTACK_N = '0' and S68K_LDS_N = '1' and S68K_UDS_N = '1' then
+					S68K_PRGRAM_DTACK_N <= '1';
+				end if;
 				case PRSS is
 					when PRS_IDLE =>
 --						if PRG_RAM_RFS_SCHED = '1' and SBRQ = '0' and SRES = '1' and HS = HS_EXEC then
@@ -1509,9 +1515,9 @@ begin
 							PRSS <= PRS_REFRESH_END;
 						end if;
 						
-					when PRS_END => 
-						if S68K_PRGRAM_DTACK_N = '0' and S68K_LDS_N = '1' and S68K_UDS_N = '1' then
-							S68K_PRGRAM_DTACK_N <= '1';
+					when PRS_END =>
+						-- the CPU has ended its cycle (DTACK was released below, or the strobes are already high)
+						if S68K_PRGRAM_DTACK_N = '1' or (S68K_LDS_N = '1' and S68K_UDS_N = '1') then
 							PRSS <= PRS_IDLE;
 						end if;
 						

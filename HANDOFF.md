@@ -293,3 +293,9 @@ NOPs of the main CPU incl. exception stacking), BIOS boots. Telemetry: PRG-RAM A
 44-55 ns (was 99-105), word RAM 25 ns in the loop / 100 ns idle, regs 24-30 ns.
 Next (build 21): post PRG-RAM writes (DTACK at issue) - the stack pushes of the exception
 entry are the remaining wait states in the 0A window.
+
+## Build 21 (2026-09-04 19:30) — posted writes broke the BIOS (reverted on the MiSTer to build 20)
+Posted PRG-RAM write DTACK was released only in PRS_END, which a posted write does not reach
+before the CPU's next cycle: DTACK stayed low into the next access (telemetry min AS->DTACK
+0 ns), that cycle ended at once with stale data -> corrupted BIOS screen, then a crash.
+Build 22: DTACK release on strobe negation in every state; PRS_END -> IDLE when released.
