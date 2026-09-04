@@ -269,3 +269,9 @@ in build 14) will return; fix them on the PCM side if needed (input registers in
 harmless: PCM accesses are HALT-throttled by the gate array).
 CDC INIT in the verificator starts with a TOC read from the drive (cddInitToc) and times
 out without a disc: not a core defect, needs a CD image mounted.
+
+## Build 18 (2026-09-04 17:35) — direct sub-CPU outputs
+Verificator: IRQ 122/128 err06 (was 106), VAR 26742 err02 (was 27906; expected 23753-23980),
+REG 8030 OK, BIOS boots. Timing -2.37@107 (TNS -918), -0.91@53.7 (TNS -11). 37,082 ALMs.
+Remaining ~12% sub-CPU slowness is in the memory path; build 19 adds sub-CPU bus-cycle
+latency statistics per region (MCD debug ports -> mcd_debug) to measure it on hardware.
