@@ -75,6 +75,9 @@ entity MCD is
 		GG_EN          : in std_logic;
 		GG_CODE        : in std_logic_vector(128 downto 0);
 		GG_AVAILABLE   : out std_logic;
+		-- bring-up telemetry: sub-CPU bus cycle observation
+		DBG_S68K_AS_N	: out std_logic;
+		DBG_S68K_DTACK_N : out std_logic;
 		
 		DBG_S68K_A		: out std_logic_vector(23 downto 0)
 	);
@@ -245,6 +248,9 @@ begin
 								  PCM_DO when PCM_N = '0' else
 								  ASIC_DO(7 downto 0);
 	S68K_DI(15 downto 8) <= ASIC_DO(15 downto 8);
+
+	DBG_S68K_AS_N <= S68K_AS_N;
+	DBG_S68K_DTACK_N <= S68K_DTACK_N;
 	
 	ASIC : entity work.ASIC
 	port map(

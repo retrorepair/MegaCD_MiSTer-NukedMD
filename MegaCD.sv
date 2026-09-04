@@ -734,6 +734,8 @@ assign exp_data_en = ~mcd_dtack_n_r & exp_rw;
 
 wire [15:0] MCD_DO;
 wire        MCD_DTACK_N;
+wire        dbg_s68k_as_n, dbg_s68k_dtack_n;   // telemetry: sub-CPU bus cycles
+wire [23:0] dbg_s68k_a;                        // MCD exports the sub-CPU address (existing debug port)
 
 wire [15:0] MCD_PCM_SL;
 wire [15:0] MCD_PCM_SR;
@@ -856,7 +858,10 @@ MCD MCD
 	.GG_RESET(code_download && ioctl_wr && !ioctl_addr),
 	.GG_EN(status[24]),
 	.GG_CODE({gg_code[95] & gg_code[128], gg_code[127:0]}),
-	.GG_AVAILABLE(gg_available2)
+	.GG_AVAILABLE(gg_available2),
+	.DBG_S68K_AS_N(dbg_s68k_as_n),
+	.DBG_S68K_DTACK_N(dbg_s68k_dtack_n),
+	.DBG_S68K_A(dbg_s68k_a)
 );
 
 ///////////////////////////////////////////////////
@@ -1009,6 +1014,7 @@ mcd_debug mcd_debug
 	.rom_cart_mode(rom_cart_mode), .region(region), .led_r(MCD_LED_RED), .led_g(MCD_LED_GREEN), .locked(locked),
 	.rom_download(rom_download), .ioctl_wr(ioctl_wr), .m68k_reset(exp_m68k_reset), .m68k_halt(exp_m68k_halt),
 	.mcd_do(MCD_DO), .sdram_dout(MCD_ROM_DO), .rom_busy(MCD_ROM_BUSY), .ras2_window(wram_window), .cart_dma(cart_dma), .exp_asel(exp_asel), .dma_rd(dma_rd),
+	.s68k_as_n(dbg_s68k_as_n), .s68k_dtack_n(dbg_s68k_dtack_n), .s68k_a(dbg_s68k_a[19:16]),
 	.DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD), .DDRAM_BUSY(DDRAM_BUSY)
 );
 `else

@@ -6,6 +6,9 @@ import mmap, struct, sys, time
 BASE = 0x3E000000
 FLAGS = ['exp_rom','exp_ras2','exp_fdc','md_reset','btn_reset','sys_reset','region0','region1',
          'rom_cart_mode','mcd_rst_n','led_r','led_g','rom_download','m68k_reset','m68k_halt','locked']
+REGIONS = ['PRG-RAM', 'WORD-RAM', 'REGS/PCM', 'PCM', 'BRAM']
+CPU_CLK_NS = 80.0      # 12.5 MHz sub-CPU
+TICK_NS = 9.3125       # 107.38 MHz telemetry clock
 
 def read():
     with open('/dev/mem', 'rb') as f:
@@ -27,8 +30,17 @@ def show(w):
     fl = ' '.join(n for i, n in enumerate(FLAGS) if flags & (1 << i))
     print('seq=%d vs=%d dl_words=%d vclk=%d AS=%d expRD=%d ras2acc=%d late=%d ras2ign=%d maxlat=%d(x9.3ns) prg=%d cart=%d lastVA=%06X lastVD=%04X [%s]'
           % (seq, vs, dl, vclk, as_, exp_rd, ras2_acc, late, ras2_ign, max_lat, prg, cart, last_va, last_vd, fl))
-    for i in range(16):
-        a = w[8 + 2*i]; b = w[9 + 2*i]
+    # sub-CPU bus statistics
+    for r in range(5):
+        a = w[8 + 2*r]; b = w[9 + 2*r]
+        cnt = a >> 32; ssum = a & 0xFFFFFFFF
+        mx = (b >> 48) & 0xFFFF; mn = (b >> 32) & 0xFFFF; long_ = b & 0xFFFFFFFF
+        if cnt == 0: continue
+        avg = ssum / cnt
+        print('  sub %-8s n=%-9d AS->DTACK avg=%6.1fns (%4.2f clk) min=%5.1fns max=%6.1fns  >8clk=%d'
+              % (REGIONS[r], cnt, avg * TICK_NS, avg * TICK_NS / CPU_CLK_NS, mn * TICK_NS, mx * TICK_NS, long_))
+    for i in range(8):
+        a = w[24 + 2*i]; b = w[25 + 2*i]
         if a == 0 and b == 0: continue
         va = (a >> 41) & 0x7FFFFF; rw = (a >> 40) & 1; rom = (a >> 39) & 1; ras2 = (a >> 38) & 1; fdc = (a >> 37) & 1; cs = (a >> 36) & 1; dt = (a >> 35) & 1
         lat_dt = (a >> 23) & 0xFFF; vd = (a >> 7) & 0xFFFF; seen_busy = a & 1; dma = (a >> 1) & 1; asel = (a >> 2) & 1

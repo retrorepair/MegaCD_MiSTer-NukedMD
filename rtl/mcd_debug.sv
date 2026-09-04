@@ -1,7 +1,23 @@
 //============================================================================
-//  Bring-up telemetry: a 64-byte record written to DDR3 every ~20ms.
+//  Bring-up telemetry: a 320-byte record written to DDR3 every ~20ms.
 //  Read from the HPS with tools/mcd_telemetry.py (mmap of /dev/mem).
-//  Test-core only; remove for release.
+//  Test-core only (compiled with MCD_TELEMETRY); not part of a release build.
+//
+//  Record (40 x 64-bit words):
+//    0     magic "MCD_NUKE"
+//    1     seq[63:32], flags[15:0]
+//    2     vs_cnt[63:32], as_cnt[31:0]           main-CPU /AS cycles
+//    3     exp_rd_cnt[63:32], late_cnt[31:0]     expansion reads / late data
+//    4     ras2_ign[63:32], ras2_acc[31:0]
+//    5     last_va, last_vd, max_lat
+//    6     prg_cnt[63:32], cart_cnt[31:0]
+//    7     vclk_cnt[63:32], dl_cnt[31:0]
+//    8-17  sub-CPU bus cycle statistics, 5 regions x 2 words:
+//            even: count[63:32], latency sum[31:0]   (latency = /AS low -> /DTACK low, 107 MHz clocks)
+//            odd : max[63:48], min[47:32], cycles longer than 8 CPU clocks[31:0]
+//          regions: 0 PRG-RAM (A19=0), 1 word RAM (8-D), 2 gate array regs (F8), 3 PCM (F0), 4 backup RAM (E)
+//    18-23 unused
+//    24-39 trace of the first 8 VDP DMA cycles from the expansion (2 words each)
 //============================================================================
 
 module mcd_debug
@@ -46,6 +62,11 @@ module mcd_debug
 	input             exp_asel,     // /ASEL
 	input             dma_rd,       // VDP DMA read strobe on the expansion (cart_dma & cart_oe)
 
+	// sub-CPU bus (53 MHz domain, sampled)
+	input             s68k_as_n,
+	input             s68k_dtack_n,
+	input       [3:0] s68k_a,       // A19..A16
+
 	// DDR3
 	output reg  [7:0] DDRAM_BURSTCNT,
 	output reg [28:0] DDRAM_ADDR,
@@ -65,9 +86,9 @@ reg [15:0] max_lat, lat;
 reg [11:0] lat_dtack, lat_busy;
 reg        seen_busy;
 reg  [1:0] s_busy;
-// trace of the first 32 bus cycles after the CPU leaves reset
-reg [63:0] trace[32];
-reg  [4:0] tr_n;
+// trace of the first VDP DMA cycles after the CPU leaves reset
+reg [63:0] trace[16];
+reg  [3:0] tr_n;
 reg        cpu_live;
 reg [23:1] last_va;
 reg [15:0] last_vd;
@@ -126,9 +147,9 @@ always @(posedge clk) begin
 		if((s_as == 2'b01 & ~cyc_dma) | (s_dma == 2'b10 & cyc_dma)) begin // /AS rose (CPU) or DMA strobe fell: end of cycle
 			in_cyc <= 0;
 			last_vd <= vd;
-			if(cpu_live && (cyc_dma | cart_dma) && ~tr_n[4]) begin // DMA cycles only
-				trace[{tr_n[3:0],1'b0}] <= {last_va, cyc_rw, seen_rom, seen_ras2, seen_fdc, cart_cs, seen_dtack, lat_dtack, vd, 4'd0, seen_asel, cyc_dma, seen_busy};
-				trace[{tr_n[3:0],1'b1}] <= {mcd_do, sdram_dout, lat_busy, lat[11:0], 8'd0};
+			if(cpu_live && (cyc_dma | cart_dma) && ~tr_n[3]) begin // DMA cycles only
+				trace[{tr_n[2:0],1'b0}] <= {last_va, cyc_rw, seen_rom, seen_ras2, seen_fdc, cart_cs, seen_dtack, lat_dtack, vd, 4'd0, seen_asel, cyc_dma, seen_busy};
+				trace[{tr_n[2:0],1'b1}] <= {mcd_do, sdram_dout, lat_busy, lat[11:0], 8'd0};
 				tr_n <= tr_n + 1'd1;
 			end
 			if(seen_rom | seen_ras2 | seen_fdc) begin
@@ -146,6 +167,43 @@ always @(posedge clk) begin
 				last_exp_va_hi <= {va[23:17], 9'd0};
 			end
 		end
+	end
+end
+
+// sub-CPU bus cycle statistics: /AS low -> /DTACK low, in 107 MHz clocks, per address region
+reg  [1:0] ss_as, ss_dtack;
+reg        sub_in_cyc, sub_seen_dtack;
+reg [15:0] sub_lat;
+reg  [2:0] sub_region;
+reg [31:0] sub_cnt[5], sub_sum[5], sub_long[5];
+reg [15:0] sub_max[5], sub_min[5];
+integer r;
+
+wire [2:0] region_of = (s68k_a[3] == 1'b0) ? 3'd0 :                    // 00000-7FFFF PRG-RAM
+                       (s68k_a >= 4'h8 && s68k_a <= 4'hD) ? 3'd1 :     // 80000-DFFFF word RAM
+                       (s68k_a == 4'hF) ? 3'd2 :                        // F0000-FFFFF: PCM (F0-F7) or registers (F8-FF); split below by A16? no: A19..16 only
+                       (s68k_a == 4'hE) ? 3'd4 : 3'd2;                  // E0000 backup RAM
+
+always @(posedge clk) begin
+	ss_as    <= {ss_as[0], s68k_as_n};
+	ss_dtack <= {ss_dtack[0], s68k_dtack_n};
+	if(~old_dl & rom_download) begin
+		for(r = 0; r < 5; r = r + 1) begin sub_cnt[r] <= 0; sub_sum[r] <= 0; sub_long[r] <= 0; sub_max[r] <= 0; sub_min[r] <= 16'hFFFF; end
+	end
+	if(ss_as == 2'b10) begin
+		sub_in_cyc <= 1; sub_seen_dtack <= 0; sub_lat <= 0; sub_region <= region_of;
+	end
+	else if(sub_in_cyc) begin
+		if(~sub_lat[15]) sub_lat <= sub_lat + 1'd1;
+		if(~ss_dtack[1] & ~sub_seen_dtack) begin
+			sub_seen_dtack <= 1;
+			sub_cnt[sub_region] <= sub_cnt[sub_region] + 1'd1;
+			sub_sum[sub_region] <= sub_sum[sub_region] + sub_lat;
+			if(sub_lat > sub_max[sub_region]) sub_max[sub_region] <= sub_lat;
+			if(sub_lat < sub_min[sub_region]) sub_min[sub_region] <= sub_lat;
+			if(sub_lat > 16'd68) sub_long[sub_region] <= sub_long[sub_region] + 1'd1; // > 8 CPU clocks of 12.5 MHz
+		end
+		if(ss_as == 2'b01) sub_in_cyc <= 0;
 	end
 end
 
@@ -180,7 +238,18 @@ always @(posedge clk) begin
 			5: DDRAM_DIN <= {last_va, 1'b0, last_vd, max_lat};
 			6: DDRAM_DIN <= {prg_cnt, cart_cnt};
 			7: DDRAM_DIN <= {vclk_cnt, dl_cnt};
-			default: DDRAM_DIN <= trace[idx[4:0]];
+			8:  DDRAM_DIN <= {sub_cnt[0], sub_sum[0]};
+			9:  DDRAM_DIN <= {sub_max[0], sub_min[0], sub_long[0]};
+			10: DDRAM_DIN <= {sub_cnt[1], sub_sum[1]};
+			11: DDRAM_DIN <= {sub_max[1], sub_min[1], sub_long[1]};
+			12: DDRAM_DIN <= {sub_cnt[2], sub_sum[2]};
+			13: DDRAM_DIN <= {sub_max[2], sub_min[2], sub_long[2]};
+			14: DDRAM_DIN <= {sub_cnt[3], sub_sum[3]};
+			15: DDRAM_DIN <= {sub_max[3], sub_min[3], sub_long[3]};
+			16: DDRAM_DIN <= {sub_cnt[4], sub_sum[4]};
+			17: DDRAM_DIN <= {sub_max[4], sub_min[4], sub_long[4]};
+			18,19,20,21,22,23: DDRAM_DIN <= 64'd0;
+			default: DDRAM_DIN <= trace[idx[3:0]];
 		endcase
 		idx <= idx + 1'd1;
 		if(idx == 39) busy_w <= 0;
