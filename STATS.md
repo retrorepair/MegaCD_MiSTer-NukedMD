@@ -116,6 +116,9 @@ Slack history:
 | 13 | 36,502 (87%) | 519 | -1.92 | -2.32 | Nuked 68000 sub-CPU, RAM hook removed |
 | 14 | 36,992 (88%) | 519 | -2.22 | -2.47* | registered MCD interface (*false PSG paths) |
 | 15 | 36,965 (88%) | 519 | -2.03 | -0.42 | registered sub-CPU outputs, PSG multicycle; 53.7 MHz TNS -0.5 ns |
+| 16 | 37,288 (89%) | 519 | | | sub-CPU clock level from the gate array phase counter |
+| 17 | 37,309 (89%) | 519 | | | Mega CD at 12.5 MHz (50 MHz enable), timer divider 384, CDC 75 Hz decoder frame |
+| 18 | 37,082 (88%) | 519 | -2.37 | -0.91 | direct sub-CPU bus outputs (DTACK window parity with FX68K) |
 
 ## Bring-up numbers from the hardware telemetry
 
@@ -125,3 +128,19 @@ Slack history:
 - Interface register stages (build 14) add 18.6 ns each way.
 - Sub-CPU PRG-RAM accesses: ~1.8 M/s while the BIOS idles; cartridge /CE0 reads ~1.3 M/s in
   Alien 3.
+
+## mcd-verificator (krikzz, V1.02, run as a cartridge)
+
+Expected ranges from real hardware (jgenesis issue 105); real model-2 hardware also fails
+CDC REGS 01 (5-bit register index is a CDX trait) and the CDC INIT step needs a mounted disc.
+
+| Test | Expected | Upstream MegaCD | Build 12 (FX68K sub) | Build 17 | Build 18 |
+|---|---|---|---|---|---|
+| COLOR CALC | OK | ERR 05 | ERR 05 | ERR 05 | ERR 05 |
+| VAR TESTS (sub-CPU memory loop) | 23753-23980 | 22744 | 22381 | 27906 | 26742 |
+| IRQ TEST (128 back-to-back INT2) | 128 handled, 224-226 | 223 (ERR 09) | OK | 106 (ERR 06) | 122 (ERR 06) |
+| REG 8030 (timer vs sub-CPU) | 1286-1288 | 1299 (ERR 07) | OK | OK | OK |
+| REG X000/X002/2006/X00C, PROG/WORD RAM, WRAM PMOD | OK | OK | OK | OK | OK |
+
+Builds 12 and earlier ran the Mega CD block at 13.42 MHz (see HANDOFF); from build 17 it runs
+at 12.5 MHz, which is why the VAR count rose before the sub-CPU bus path was corrected.
