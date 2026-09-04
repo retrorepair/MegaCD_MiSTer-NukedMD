@@ -177,3 +177,17 @@ outside games/MegaCD (SelectFile resets any path outside the core's home); user 
   bidirectional mode plus a JTAG hub on every spram. Set to NO: expected 7 blocks per bank
   (-48 M10K), which pays for the Nuked sub-CPU microcode (+14 M10K, -6 for FX68K).
 - Cost estimate: +1,450 ALMs for the CPU, ~+8 M10K net before the VRAM saving.
+
+## Build 13 (2026-09-04 13:20) — Nuked 68000 sub-CPU works; VRAM fix pays off
+BIOS boots (sub-CPU: PRG-RAM traffic 1.8M/s, green LED set by the BIOS), Alien 3 runs.
+Fit 36,502 ALMs (87%), **519/553 M10K** (VRAM banks now Single Port 256x256, 7 blocks
+each; Nuked sub-CPU microcode 14 blocks in M10K), 54,544 registers.
+Timing (slow 85C): -1.92ns @107MHz, -2.32ns @53.7MHz. Worst 40 paths (sta_paths.tcl ->
+output_files/worst_paths.txt): almost all start at md_board|AS (107MHz register) and end in
+ASIC combinational decode (S68K_DO mux, PRG_RAM_ADDR/WRL, WR1R.DO), the md_board VD mux
+(through MCD DTACK -> exp_data_en) or the sdram data register (via mcd_cart's write mux),
+plus two NukedMD-internal paths (~-1.7ns: m68k w6->w980, _M3 -> ym7101 sr bits).
+User reports intermittent audio pops/wobble (build 12): consistent with marginal timing.
+Next: register the MCD expansion interface in the 53.69MHz domain (inputs and DTACK/DO
+outputs: +37ns round trip, within the measured ~230ns CPU margin; DMA-from-ROM margin to be
+verified on hardware), register mcd_cart's address decodes, then seed sweep.
