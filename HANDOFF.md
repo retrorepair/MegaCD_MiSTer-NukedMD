@@ -117,3 +117,10 @@ burst (address decode with w223=0), /ASEL follows w254, and the per-word strobe 
 strobes, so MegaCD.sv now synthesises select+UDS+LDS from cart_dma & cart_oe (dma_rd) and
 the word RAM select is a level (/RAS2 low inside the window). Build 9. Telemetry traces DMA
 strobes as cycles (flag DMA).
+
+## Build 9 lost, build 10 = DMA fix + cartridge slot (2026-09-04 09:08)
+Editing files.qip while a flow runs makes Quartus rewrite MegaCD.qsf mid-flow (error 125085,
+inlines 300 lines) and the fitter then died (293007). Rule: never touch files.qip/qsf/sources
+while quartus_sh runs; keep a copy of the 62-line qsf. Build 10 carries the DMA select
+synthesis plus the new cartridge slot (mcd_cart.sv v2, EEPROM_24CXX.sv, OSD FS6, J-Cart
+option status[31]); the cart logic is inert until a cartridge is inserted.
