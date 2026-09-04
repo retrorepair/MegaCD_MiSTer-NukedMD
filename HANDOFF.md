@@ -107,3 +107,13 @@ Build 6 ran for a while then the main CPU crashed (AS frozen): RAS-only refresh 
 /RAS2 during RAM/VDP cycles (/CAS2 high) passed the CAS-before-RAS rule and became word RAM
 writes of bus garbage. Build 7 qualifies /RAS2 with the word RAM window. Telemetry: word RAM
 accesses ~140k/s, ignored refresh pulses ~65k/s, late=0, CPU running. Timing -1.75ns@107.
+
+## Build 7 screen = stripes every 4px (2026-09-04 08:30)
+Screenshot (/media/fat/screenshots/MegaCD, `echo "screenshot name" > /dev/MiSTer_cmd`): border
+colour right, active area one repeated word. VDP DMA from the expansion returned the same word:
+during VDP DMA the FC1004 drives /AS,/UDS,/LDS inactive; /ROM or /RAS2 stay asserted for the
+burst (address decode with w223=0), /ASEL follows w254, and the per-word strobe is CAS0
+(cart_oe = vdp_dma_oe_early). fpgagen presented DMA to the gate array as word reads with
+strobes, so MegaCD.sv now synthesises select+UDS+LDS from cart_dma & cart_oe (dma_rd) and
+the word RAM select is a level (/RAS2 low inside the window). Build 9. Telemetry traces DMA
+strobes as cycles (flag DMA).
