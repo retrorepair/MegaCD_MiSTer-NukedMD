@@ -142,3 +142,15 @@ Cartridge test (Alien 3 via an MGL, index 6): black screen. Two findings:
 Test MGL on the MiSTer: /media/fat/_Console/MegaCD_cart_test.mgl (absolute path to
 /media/fat/games/MegaCD/Alien3.bin, index 6). Note the telemetry dl_words counter counts
 each ioctl_wr twice (53MHz pulse sampled at 107MHz): BIOS 128KB -> 131072, 512KB cart -> 524288.
+
+## Build 11 (2026-09-04 10:32) — BIOS and cartridge both verified on hardware
+Deployed as _Console/MegaCD_TEST_NukedMD_20260904.rbf and releases/. Screenshots: BIOS 2.00
+boot screen (no cart), Alien 3 attract mode + intro (cart inserted via the MGL). Telemetry
+in cart mode: bus data matches the ROM words at the traced addresses, /RAS2 never accepted
+(word RAM window moved to 600000), no late reads.
+Fit 36,060/41,910 ALMs (86%), 553/553 M10K, 56 DSP, 56,119 registers. Timing (slow 85C):
+-2.68ns@107MHz (TNS -1322), -1.90ns@53.7MHz — same NukedMD-internal paths as before,
+placement varies build to build; the core runs.
+Test MGL now points at the original ROM in games/MegaDrive (the Alien3.bin copy was removed).
+Still untested on hardware: CD boot (no CD image available here), PCM audio, RAM cart
+save/load, Pier Solar / EEPROM / J-Cart mappers. The telemetry block is still in the build.
