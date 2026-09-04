@@ -71,3 +71,12 @@ latch. The arbiter's own DTACK arrives at 121ns, /ASEL at 112ns. So the expansio
 functionally right; the hardware black screen (build 1/2) must come from something the sim
 does not model: the BIOS download into SDRAM, or silicon timing. Build 3 adds a 32-cycle
 bus trace to the telemetry to decide.
+
+## Root cause of the black screen (build 4 trace, 2026-09-04 02:15)
+Hardware trace: SDRAM returns the right BIOS word (FD00 @ 65ns), gate array DTACKs @ 84ns,
+but the bus ends the cycle with 0000 on ~1 in 15 ROM reads. The gate array's EXT_VDO gives
+word-RAM data priority over ROM data, and the FC1004 arbiter pulses /RAS2 (CAS-before-RAS,
+/CAS2 already low) to refresh the expansion DRAM in the middle of unrelated CPU cycles. The
+ASIC treated every /RAS2 low as a word RAM access -> zeros won. fpgagen's /RAS2 was a pure
+address decode, so this never happened before. Fix (MegaCD.sv): word RAM select is set only
+when /RAS2 falls with /CAS2 high, held to the end of the bus cycle (exp_ras2_acc). Build 5.

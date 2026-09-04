@@ -451,7 +451,7 @@ wire        PAL = region[1];
 wire        JAP = ~|region;
 
 wire [23:1] cart_addr;
-wire        cart_cs, cart_oe, cart_lwr, cart_uwr, cart_time, cart_dma;
+wire        cart_cs, cart_oe, cart_lwr, cart_uwr, cart_time, cart_dma, cart_cas2;
 wire [15:0] cart_data_wr;
 wire [15:0] cart_data;
 wire        cart_data_en;
@@ -548,6 +548,7 @@ md_board md_board
 	.cart_lwr(cart_lwr),
 	.cart_uwr(cart_uwr),
 	.cart_time(cart_time),
+	.cart_cas2(cart_cas2),
 	.cart_m3_pause(1'b0),
 	.vdp_dma(cart_dma),
 	.ext_dtack(ext_dtack),
@@ -659,6 +660,19 @@ dpram #(13,8) ram_z80k
 wire        ext_dtack   = ~MCD_DTACK_N;              // the gate array asserts /DTACK on the bus
 wire        exp_data_en = ~MCD_DTACK_N & exp_rw;     // and drives the data bus for reads
 
+// /RAS2 is a DRAM row strobe: the arbiter also pulses it (CAS-before-RAS, with /CAS2 already
+// low) to refresh the expansion DRAM, in the middle of unrelated CPU cycles. Only a
+// RAS-before-CAS cycle is a word RAM access; the gate array VHDL expects an address-decode
+// style select, so it gets one that is set when /RAS2 falls with /CAS2 high and held to
+// the end of the bus cycle.
+reg exp_ras2_acc;
+always @(posedge clk_md) begin
+	reg old_ras2;
+	old_ras2 <= exp_ras2;
+	if(exp_as) exp_ras2_acc <= 0;
+	else if(old_ras2 & ~exp_ras2 & ~cart_cas2) exp_ras2_acc <= 1;
+end
+
 ///////////////////////////////////////////////////
 // Mega CD
 
@@ -721,7 +735,7 @@ MCD MCD
 	.EXT_DTACK_N(MCD_DTACK_N),
 	.EXT_ASEL_N(exp_as),
 	.EXT_VCLK_CE(1'b0),
-	.EXT_RAS2_N(exp_ras2),
+	.EXT_RAS2_N(~exp_ras2_acc),
 	.EXT_ROM_N(exp_rom),
 	.EXT_FDC_N(exp_fdc),
 
