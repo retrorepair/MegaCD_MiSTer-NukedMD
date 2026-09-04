@@ -139,22 +139,19 @@ begin
 		strobe_z		=> n_strobe_z
 	);
 
-	-- Bus outputs registered in the 53.69 MHz Mega CD domain: the model's pins move on MCLK
-	-- edges while the gate array, CDC and PCM decode them combinationally in the CLK domain;
-	-- one CLK stage (the bus buffers of the real board) gives that decode a full CLK period.
+	-- Bus outputs go to the gate array directly. A register stage here (tried in build 15 for
+	-- timing) delays /AS by one CLK (18.6 ns) against the gate array's enable-timed DTACK and
+	-- closes the CPU's DTACK acceptance window one clock early: the sub-CPU then takes one
+	-- more wait state than FX68K on every late-acknowledged access (mcd-verificator IRQ and
+	-- VAR tests). There is no buffer between the sub-CPU and the gate array on the real board.
 	-- Released (high-Z) pins read as pulled up, as md_board does for the main CPU.
-	process(CLK)
-	begin
-		if rising_edge(CLK) then
-			A     <= n_address;
-			DO    <= n_data_o;
-			AS_N  <= n_strobe_z or n_as;
-			UDS_N <= n_strobe_z or n_uds;
-			LDS_N <= n_strobe_z or n_lds;
-			RNW   <= n_rw_z or n_rw;
-			FC    <= n_fc or (n_fc_z & n_fc_z & n_fc_z);
-		end if;
-	end process;
+	A     <= n_address;
+	DO    <= n_data_o;
+	AS_N  <= n_strobe_z or n_as;
+	UDS_N <= n_strobe_z or n_uds;
+	LDS_N <= n_strobe_z or n_lds;
+	RNW   <= n_rw_z or n_rw;
+	FC    <= n_fc or (n_fc_z & n_fc_z & n_fc_z);
 	BG_N  <= n_bg;
 	VMA_N <= '1';
 	RESET_O_N <= not n_reset_pull;

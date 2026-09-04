@@ -257,3 +257,15 @@ where real DRAM gives ~1 wait state. FX68K hid this by accepting a late DTACK in
 cycle. Next: MCD-level bench (real ASIC + sdram + Nuked CPU) to count clocks per access type,
 then shorten the PRG-RAM/word RAM acknowledge path (speculative SDRAM read on address valid).
 37,309 ALMs (89%).
+
+## Sub-CPU DTACK window (2026-09-04 17:30) — the one-clock skew
+sim_sub DTACK sweep (DTACK k CLKs after /AS -> loop length): FX68K 0-wait up to k=3, then +1
+wait every 4 CLK (4/8/12). Nuked with registered outputs: 3/7/11 (window closes one CLK
+early -> one extra wait on every late DTACK: PRG-RAM through SDRAM, word RAM state machine).
+Nuked with direct outputs and the phase-counter clock: 4/8/12, identical to FX68K. Build 13
+had direct outputs but the late clock (same net skew), so no build so far was skew-free.
+Build 18: MC68K.vhd outputs direct again. The 53.7 MHz paths sub-CPU -> PCM decode (-1.77 ns
+in build 14) will return; fix them on the PCM side if needed (input registers in PCM.vhd are
+harmless: PCM accesses are HALT-throttled by the gate array).
+CDC INIT in the verificator starts with a TOC read from the drive (cddInitToc) and times
+out without a disc: not a core defect, needs a CD image mounted.
