@@ -275,3 +275,13 @@ Verificator: IRQ 122/128 err06 (was 106), VAR 26742 err02 (was 27906; expected 2
 REG 8030 OK, BIOS boots. Timing -2.37@107 (TNS -918), -0.91@53.7 (TNS -11). 37,082 ALMs.
 Remaining ~12% sub-CPU slowness is in the memory path; build 19 adds sub-CPU bus-cycle
 latency statistics per region (MCD debug ports -> mcd_debug) to measure it on hardware.
+
+## Build 19 telemetry (2026-09-04 18:30) — sub-CPU bus latency on hardware
+AS->DTACK: PRG-RAM avg 99-105 ns (min 93, max 280-335), word RAM 27 ns during the VAR loop
+(99 ns while the BIOS idles), registers 20-30 ns. The 68000 samples DTACK ~100 ns after /AS
+(S4 falling edge minus setup), so PRG-RAM sits on the 0/1-wait boundary: the die-accurate CPU
+takes a wait state on nearly every PRG-RAM fetch, FX68K did not, and the verificator's
+expected count corresponds to ~0 wait states (18.7 clocks per 4-access loop iteration).
+Build 20: ASIC asserts the sub-CPU PRG-RAM read DTACK when the SDRAM controller accepts the
+request (PRG_RDY falls) instead of when the data is back; data then arrives deterministically
+~60 ns later, inside the 80 ns the CPU waits between sampling DTACK and latching data.

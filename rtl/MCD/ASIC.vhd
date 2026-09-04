@@ -1450,6 +1450,12 @@ begin
 					when PRS_WAIT =>
 						if PRG_RDY = '0' then
 							if PRG_RAM_RD = '1' then
+								-- The SDRAM controller has accepted the read: from here the data arrives in a fixed
+								-- ~60 ns, so DTACK can go now. The 68000 latches data one clock (80 ns) after it
+								-- samples DTACK; acknowledging only once the data was back cost the die-accurate
+								-- CPU a wait state on nearly every PRG-RAM fetch (measured 93-105 ns AS to DTACK)
+								-- where the real PRG-RAM answers with none (mcd-verificator VAR test).
+								S68K_PRGRAM_DTACK_N <= '0';
 								PRSS <= PRS_READ;
 							else
 								PRSS <= PRS_WRITE;
@@ -1461,7 +1467,6 @@ begin
 							PRG_RAM_RD <= '0';
 	
 							S68K_PRGRAM_DO <= PRG_DI;
-							S68K_PRGRAM_DTACK_N <= '0';
 							
 							PRSS <= PRS_END;
 						end if;
