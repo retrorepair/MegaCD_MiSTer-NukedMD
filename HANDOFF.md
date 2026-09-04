@@ -61,3 +61,13 @@ upstream tree is kept next to it in `MegaCD_MiSTer-master_ORIG` for diffing.
   * 107MHz next: ym7101 internals / AS -> md_board VD[8] mux (-2.46ns): NukedMD itself.
   * 53.7MHz: audio_cond psg_iir multiplier (-1.75ns): stock module, consumed at 7MHz ce.
 - TimeQuest helper scripts: sta_paths.tcl / sta_paths2.tcl (quartus_sta -t).
+
+## Simulation result (2026-09-04 01:05)
+ModelSim needed explicit power-up values (md_board MCLK_e/bus regs, sdram state/mode — all
+0 in hardware anyway) and a force of the arbiter's 17ms power-on timer (w328) to get going.
+With that, the bench boots the real BIOS: vectors FFFF FD00 0000 0426 read correctly,
+gate array /DTACK 75-84ns after /AS, data on VD at 84-93ns, 223-233ns margin to the 68k
+latch. The arbiter's own DTACK arrives at 121ns, /ASEL at 112ns. So the expansion glue is
+functionally right; the hardware black screen (build 1/2) must come from something the sim
+does not model: the BIOS download into SDRAM, or silicon timing. Build 3 adds a 32-cycle
+bus trace to the telemetry to decide.
