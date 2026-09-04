@@ -153,6 +153,7 @@ assign CLK_VIDEO = clk_ram;
 localparam CONF_STR = {
 	"MegaCD;;",
 	"S0,CUECHD,Insert Disk;",
+	"FS6,BINGENMD,Insert Cartridge;",
 	"-;",
 	"h6O[7:6],Region,Auto(JP),JP,US,EU;",
 	"h7O[7:6],Region,Auto(US),JP,US,EU;",
@@ -192,6 +193,7 @@ localparam CONF_STR = {
 	"P2O[4],Swap Joysticks,No,Yes;",
 	"P2O[5],6 Buttons Mode,No,Yes;",
 	"P2O[22:21],Multitap,Disabled,4-Way,TeamPlayer: Port1,TeamPlayer: Port2;",
+	"P2O[31],J-Cart,Off,On;",
 	"P2-;",
 	"P2O[19:18],Mouse,None,Port1,Port2;",
 	"P2O[20],Mouse Flip Y,No,Yes;",
@@ -254,7 +256,7 @@ wire [21:0] gamma_bus;
 
 wire [1:0] gun_mode = status[41:40];
 wire       gun_btn_mode = status[42];
-wire       gun_type = ~status[45];
+wire       gun_type = rom_cart_mode ? cart_gun_type : ~status[45];
 
 assign sd_buff_din[0] = sd_lba[0][10:4] ? tmpram_sd_buff_data : bram_sd_buff_data;
 
@@ -340,7 +342,9 @@ always @(posedge clk_sys) begin
 	end
 end
 
-wire rom_download = ioctl_download & (ioctl_index[5:0] <= 6'h01);
+wire bios_download = ioctl_download & ~ioctl_index[6] & (ioctl_index[5:0] <= 6'h01);
+wire cart_download = ioctl_download & ((ioctl_index[5:0] == 6'h06) | (ioctl_index[6] & (ioctl_index[5:0] <= 6'h01))); // OSD "Insert Cartridge" or cart.rom next to the CD
+wire rom_download  = bios_download | cart_download;
 wire cdc_dat_download = ioctl_download & (ioctl_index[5:0] == 6'h02);
 wire cdc_sub_download = ioctl_download & (ioctl_index[5:0] == 6'h03);
 wire cdc_cdda_download = ioctl_download & (ioctl_index[5:0] == 6'h04);
@@ -610,7 +614,7 @@ md_board md_board
 	.vdp_m5(vdp_m5),
 	.vdp_rs1(vdp_rs1),
 	.vdp_cramdot_dis(~status[10]),
-	.ym2612_status_enable(1'b0),
+	.ym2612_status_enable(rom_cart_mode & cart_ym2612_quirk),
 
 	.dma_68k_req(dma_68k_req),
 	.dma_z80_req(dma_z80_req),
@@ -800,8 +804,15 @@ MCD MCD
 
 wire [24:1] cart_mem_addr;
 wire        cart_mem_rd;
-wire        cart_mem_wrl;
+wire        cart_mem_wrl, cart_mem_wrh;
 wire [15:0] cart_mem_din;
+wire        cart_eep_sel, cart_eep_we;
+wire [12:0] cart_eep_addr;
+wire  [7:0] cart_eep_di;
+wire        cart_gun_type, cart_ym2612_quirk, PIER_QUIRK;
+wire  [7:0] cart_gun_delay;
+wire [15:0] jcart_data;
+wire        jcart_th;
 wire [15:0] cart_mem_dout;
 wire        cart_mem_busy;
 wire        cart_ram_wr;
@@ -811,7 +822,13 @@ wire        CART_EN = status[3];
 mcd_cart cart
 (
 	.clk(clk_ram),
+	.clk_sys(clk_sys),
 	.reset(md_reset),
+
+	.cart_dl(cart_download),
+	.cart_dl_addr(ioctl_addr),
+	.cart_dl_data(ioctl_data),
+	.cart_dl_wr(ioctl_wr),
 
 	.cart_addr(cart_addr),
 	.cart_data_wr(cart_data_wr),
@@ -825,23 +842,31 @@ mcd_cart cart
 
 	.rom_mode(rom_cart_mode),
 	.ram_cart_en(CART_EN),
-	.rom_mask(rom_mask),
-	.pier_quirk(PIER_QUIRK),
 
 	.mem_addr(cart_mem_addr),
 	.mem_rd(cart_mem_rd),
 	.mem_wrl(cart_mem_wrl),
+	.mem_wrh(cart_mem_wrh),
 	.mem_din(cart_mem_din),
 	.mem_dout(cart_mem_dout),
 	.mem_busy(cart_mem_busy),
 
+	.eep_sel(cart_eep_sel),
+	.eep_addr(cart_eep_addr),
+	.eep_di(cart_eep_di),
+	.eep_we(cart_eep_we),
+	.eep_q(MCD_BRAM_DI),
+
 	.ram_wr(cart_ram_wr),
 
-	.ep_cs(ep_cs),
-	.ep_hold(ep_hold),
-	.ep_sck(ep_sck),
-	.ep_si(ep_si),
-	.m95_so(m95_so)
+	.jcart_en(status[31]),
+	.jcart_data(jcart_data),
+	.jcart_th(jcart_th),
+
+	.gun_type(cart_gun_type),
+	.gun_sensor_delay(cart_gun_delay),
+	.ym2612_quirk(cart_ym2612_quirk),
+	.pier_quirk_o(PIER_QUIRK)
 );
 
 ///////////////////////////////////////////////////
@@ -867,7 +892,7 @@ sdram sdram
 	.dout0(cart_mem_dout),
 	.rd0(cart_mem_rd),
 	.wrl0(cart_mem_wrl),
-	.wrh0(1'b0),
+	.wrh0(cart_mem_wrh),
 	.busy0(cart_mem_busy),
 
 	// Mega CD BIOS ROM (main CPU / VDP DMA)
@@ -898,7 +923,7 @@ sdram sdram
 	.busy3(MCD_PCMRAM_BUSY),
 
 	// Load/Save
-	.addr4( rom_download ? (rom_cart_mode ? {2'b00,ioctl_addr[22:1]} : {6'b011110,ioctl_addr[18:1]}) : //ROM  000000-7FFFFF/F00000-F7FFFF
+	.addr4( rom_download ? (cart_download ? {2'b00,ioctl_addr[22:1]} : {6'b011110,ioctl_addr[18:1]}) : //ROM  000000-7FFFFF/F00000-F7FFFF
 								{5'b01110,tmpram_lba[9:0],tmpram_addr}),    //CART RAM E00000-EFFFFF for sd_*
 	.din4(rom_download ? {ioctl_data[7:0],ioctl_data[15:8]} : {tmpram_dout,tmpram_dout}),
 	.dout4(tmpram_din),
@@ -1019,9 +1044,9 @@ wire [15:0] bram_sd_buff_data;
 dpram_dif #(13,8,12,16) bram
 (
 	.clock(clk_sys),
-	.address_a(PIER_QUIRK ? m95_addr : MCD_BRAM_ADDR),
-	.data_a(PIER_QUIRK ? m95_di : MCD_BRAM_DO),
-	.wren_a(PIER_QUIRK ? m95_we : MCD_BRAM_WE),
+	.address_a(cart_eep_sel ? cart_eep_addr : MCD_BRAM_ADDR),
+	.data_a(cart_eep_sel ? cart_eep_di : MCD_BRAM_DO),
+	.wren_a(cart_eep_sel ? cart_eep_we : MCD_BRAM_WE),
 	.q_a(MCD_BRAM_DI),
 
 	.address_b({sd_lba[0][3:0],sd_buff_addr}),
@@ -1331,8 +1356,8 @@ md_io md_io
 	.MOUSE(ps2_mouse),
 	.MOUSE_OPT(status[20:18]),
 
-	.jcart_data(),
-	.jcart_th(1'b1),
+	.jcart_data(jcart_data),
+	.jcart_th(jcart_th),
 
 	.port1_out(md_io_port1),
 	.port1_in(PA_o  | {7{snac_port1}}),
@@ -1375,7 +1400,7 @@ lightgun lightgun
 
 	.BTN_MODE(gun_btn_mode),
 	.SIZE(status[44:43]),
-	.SENSOR_DELAY(gun_type ? 8'd32 : 8'd64),
+	.SENSOR_DELAY(rom_cart_mode ? cart_gun_delay : (gun_type ? 8'd32 : 8'd64)),
 
 	.TARGET(lg_target),
 	.SENSOR(lg_sensor),
@@ -1465,8 +1490,8 @@ end
 
 /////////////////////////  BRAM SAVE/LOAD  /////////////////////////////
 
-wire downloading = save_download;
-wire bk_change  = MCD_BRAM_WE | m95_we | (CART_EN & cart_ram_wr);
+wire downloading = save_download | cart_download;
+wire bk_change  = MCD_BRAM_WE | ((CART_EN | rom_cart_mode) & cart_ram_wr);
 wire autosave   = status[13];
 wire bk_load    = status[16];
 wire bk_save    = status[17];
@@ -1480,8 +1505,8 @@ always @(posedge clk_sys) begin
 	old_downloading <= downloading;
 	if(~old_downloading & downloading) bk_ena <= 0;
 
-	//Save file always mounted in the end of downloading state.
-	if(downloading && img_mounted && !img_readonly) bk_ena <= 1;
+	//Save file mounted by the HPS (CD game save, or the cartridge save for "Insert Cartridge")
+	if(img_mounted && !img_readonly) bk_ena <= 1;
 
 	old_change <= bk_change;
 	if (~old_change & bk_change) sav_pending <= 1;
@@ -1578,60 +1603,17 @@ end
 
 
 ///////////////////////////////////////////////
-// Pier Solar EEPROM (lives in the internal backup RAM buffer while the cartridge is present)
+// Cartridge in the slot: set by a cartridge download (OSD "Insert Cartridge" or cart.rom
+// next to the CD), cleared by a BIOS (re)load or "Reset & Eject". While set, /CART is low:
+// the cartridge boots at 000000 and the Mega CD sits at 400000.
 
-wire        ep_si, m95_so, ep_sck, ep_hold, ep_cs;
-wire  [7:0] m95_di, m95_q;
-wire [11:0] m95_addr;
-wire        m95_we;
-
-STM95XXX pier_eeprom
-(
-	.clk(clk_sys),
-	.enable(PIER_QUIRK),
-	.so(m95_so),
-	.si(ep_si),
-	.sck(ep_sck),
-	.hold_n(ep_hold),
-	.cs_n(ep_cs),
-	.wp_n(1'b1),
-	.ram_addr(m95_addr),
-	.ram_q(MCD_BRAM_DI),
-	.ram_di(m95_di),
-	.ram_RnW(m95_we)
-);
-
-reg PIER_QUIRK = 0;
+reg rom_cart_mode = 0;
 always @(posedge clk_sys) begin
-	reg [63:0] cart_id;
-	reg old_download;
-
-	old_download <= rom_download;
-	if(~old_download && rom_download) {PIER_QUIRK} <= 0;
-
-	if(ioctl_wr & rom_download & ioctl_index[6]) begin
-		if(ioctl_addr == 'h182) cart_id[63:56] <= ioctl_data[15:8];
-		if(ioctl_addr == 'h184) cart_id[55:40] <= {ioctl_data[7:0],ioctl_data[15:8]};
-		if(ioctl_addr == 'h186) cart_id[39:24] <= {ioctl_data[7:0],ioctl_data[15:8]};
-		if(ioctl_addr == 'h188) cart_id[23:08] <= {ioctl_data[7:0],ioctl_data[15:8]};
-		if(ioctl_addr == 'h18A) cart_id[07:00] <= ioctl_data[7:0];
-		if(ioctl_addr == 'h18C) begin
-			     if(cart_id == "T-574023") PIER_QUIRK <= 1; // Pier Solar Reprint
-			else if(cart_id == "T-574013") PIER_QUIRK <= 1; // Pier Solar 1st Edition
-		end
-	end
-end
-
-reg [23:13] rom_mask;
-reg         rom_cart_mode;
-always @(posedge clk_sys) begin
-	if (rom_download & ioctl_wr) begin
-		rom_cart_mode <= ioctl_index[6];
-		if (ioctl_index[6]) begin
-			rom_mask <= rom_mask | ioctl_addr[23:13];
-			if(!ioctl_addr) rom_mask <= 0;
-		end
-	end
+	reg old_cart_dl, old_bios_dl;
+	old_cart_dl <= cart_download;
+	old_bios_dl <= bios_download;
+	if(~old_cart_dl & cart_download) rom_cart_mode <= 1;
+	if((~old_bios_dl & bios_download) | status[0]) rom_cart_mode <= 0;
 end
 
 ///////////////////////////////////////////////
