@@ -124,3 +124,21 @@ inlines 300 lines) and the fitter then died (293007). Rule: never touch files.qi
 while quartus_sh runs; keep a copy of the 62-line qsf. Build 10 carries the DMA select
 synthesis plus the new cartridge slot (mcd_cart.sv v2, EEPROM_24CXX.sv, OSD FS6, J-Cart
 option status[31]); the cart logic is inert until a cartridge is inserted.
+
+## Build 10 verified (2026-09-04 09:45) — BIOS screen correct, cartridge path broken
+Screenshot of build 10: Mega-CD logo, "(c) 1993 SEGA Ver. 2.00", "PRESS THE START BUTTON"
+drawn correctly, border right. So the DMA select synthesis (dma_rd) was the last piece for
+the BIOS. Fit 36,398/41,910 ALMs (87%), 553/553 M10K, 56 DSP; setup -2.03ns@107 / -0.93ns@53.7
+(slow corner, NukedMD internals).
+Cartridge test (Alien 3 via an MGL, index 6): black screen. Two findings:
+- MGL relative paths resolve against Main's HomeDir, which on this MiSTer is the CIFS share
+  cifs/MegaCD (Main prints "Found CIFS dir"); use absolute paths in test MGLs. Main console
+  output is on COM3 (115200); a stale COM3 logger from last night was killed.
+- Real bug (telemetry: CPU running, every cart read = 0000): mcd_cart.sv's SRAM clear sweep
+  held its SDRAM write request high; sdram.sv accepts a request on the rising edge only, so
+  the sweep wrote one word and stalled forever while masking all cartridge reads. Fixed: one
+  request pulse per word, and `clearing` extends md_reset until the sweep is done (~15ms,
+  longer than the ~1.8ms post-download reset). Build 11 started 09:58.
+Test MGL on the MiSTer: /media/fat/_Console/MegaCD_cart_test.mgl (absolute path to
+/media/fat/games/MegaCD/Alien3.bin, index 6). Note the telemetry dl_words counter counts
+each ioctl_wr twice (53MHz pulse sampled at 107MHz): BIOS 128KB -> 131072, 512KB cart -> 524288.
