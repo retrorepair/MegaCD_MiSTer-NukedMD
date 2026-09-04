@@ -6,6 +6,7 @@ use IEEE.NUMERIC_STD.ALL;
 entity MCD is
 	port(
 		CLK				: in std_logic;
+		MCLK				: in std_logic;	-- 107.38 MHz: sub-CPU gate-level model (M68K_WRAP)
 		RST_N				: in std_logic;
 		ENABLE			: in std_logic;
 		MCD_RST_N      : out std_logic;
@@ -214,6 +215,7 @@ begin
 	S68K :  entity work.M68K_WRAP
 	port map(
 		CLK   		=> CLK,
+		MCLK			=> MCLK,
 		RST_N      	=> RST_N,
 		
 		RESET_I_N	=> S68K_RESET_N,

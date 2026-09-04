@@ -154,3 +154,26 @@ placement varies build to build; the core runs.
 Test MGL now points at the original ROM in games/MegaDrive (the Alien3.bin copy was removed).
 Still untested on hardware: CD boot (no CD image available here), PCM audio, RAM cart
 save/load, Pier Solar / EEPROM / J-Cart mappers. The telemetry block is still in the build.
+
+## Build 12 (2026-09-04 11:35) — TMSS, verified
+TMSS as in the MegaDrive core: 2KB ROM auto-loaded by Main as `boot2.rom` from the core
+folder (index 80 hex; boot1.rom = index 40 is what Main uses for cart.rom next to a CD, so it
+is not usable), stored in MLABs (no M10K free), OSD "TMSS" (status[9], menumask bit 3 =
+tmss_loaded). Main takes this core's folder from the user's CIFS share (cifs/MegaCD), so the
+ROM was copied there and to games/MegaCD. Verified: "PRODUCED BY OR UNDER LICENSE FROM SEGA
+ENTERPRISES LTD." then Alien 3. Fit 37,158 ALMs (89%), 553 M10K. Test trick: set status bits
+in /media/fat/config/MegaCD.CFG (16 bytes = status[127:0]) before loading via MGL.
+Main cannot load games/MegaDrive/boot.rom for this core nor start the cartridge browser
+outside games/MegaCD (SelectFile resets any path outside the core's home); user accepted.
+
+## Build 13 (started 11:45) — Nuked 68000 as Mega CD sub-CPU, VRAM block RAM fix
+- rtl/MCD/MC68K.vhd now wraps nuked-md's m68kcpu instead of FX68K (rtl/FX68K removed).
+  The model samples CLK as a level on MCLK (new MCD/M68K_WRAP port, 107.38 MHz); the
+  12.5 MHz clock is rebuilt from CLK_12M_R/F. RESET pulls HALT low too (68000 reset needs
+  both; the board's SRES drives both). Released strobes read as '1'.
+- Fitter RAM summary showed the VRAM banks as True Dual Port 256x256 (13 M10K each) although
+  vram_ip only needs a single port: bram.vhd's spram_sz carries
+  `lpm_hint ENABLE_RUNTIME_MOD=YES` (In-System Memory Content Editor), which forces the
+  bidirectional mode plus a JTAG hub on every spram. Set to NO: expected 7 blocks per bank
+  (-48 M10K), which pays for the Nuked sub-CPU microcode (+14 M10K, -6 for FX68K).
+- Cost estimate: +1,450 ALMs for the CPU, ~+8 M10K net before the VRAM saving.

@@ -1,4 +1,3 @@
-set_global_assignment -name QIP_FILE rtl/FX68K/fx68k.qip
 set_global_assignment -name QIP_FILE rtl/nuked-md.qip
 set_global_assignment -name QIP_FILE rtl/MCD/MCD.qip
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv

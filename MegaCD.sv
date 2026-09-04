@@ -154,6 +154,7 @@ localparam CONF_STR = {
 	"MegaCD;;",
 	"S0,CUECHD,Insert Disk;",
 	"FS6,BINGENMD,Insert Cartridge;",
+	"d3O[9],TMSS,Disabled,Enabled;",
 	"-;",
 	"h6O[7:6],Region,Auto(JP),JP,US,EU;",
 	"h7O[7:6],Region,Auto(US),JP,US,EU;",
@@ -222,7 +223,9 @@ localparam CONF_STR = {
 	"V,v",`BUILD_DATE
 };
 
-wire [15:0] status_menumask = {6'd0, en216p,region,!region,~gg_available,!gun_mode,1'b1,~dbg_menu,1'b0,~bk_ena};
+reg tmss_enable = 0;  // TMSS option, latched at reset (logic further down)
+reg tmss_loaded = 0;  // boot2.rom received: enables the OSD entry (menumask bit 3)
+wire [15:0] status_menumask = {6'd0, en216p,region,!region,~gg_available,!gun_mode,tmss_loaded,~dbg_menu,1'b0,~bk_ena};
 wire [127:0] status;
 wire  [1:0] buttons;
 wire [11:0] joystick_0,joystick_1,joystick_2,joystick_3,joystick_4;
@@ -342,8 +345,10 @@ always @(posedge clk_sys) begin
 	end
 end
 
-wire bios_download = ioctl_download & ~ioctl_index[6] & (ioctl_index[5:0] <= 6'h01);
-wire cart_download = ioctl_download & ((ioctl_index[5:0] == 6'h06) | (ioctl_index[6] & (ioctl_index[5:0] <= 6'h01))); // OSD "Insert Cartridge" or cart.rom next to the CD
+// Main sends boot.rom as index 00, cart.rom next to a CD as 40, boot2.rom (TMSS) as 80.
+wire bios_download = ioctl_download & (ioctl_index[7:6] == 2'b00) & (ioctl_index[5:0] <= 6'h01);
+wire cart_download = ioctl_download & ((ioctl_index[5:0] == 6'h06) | ((ioctl_index[7:6] == 2'b01) & (ioctl_index[5:0] <= 6'h01))); // OSD "Insert Cartridge" or cart.rom next to the CD
+wire tmss_download = ioctl_download & (ioctl_index == 8'h80);                                                                    // games/MegaCD/boot2.rom
 wire rom_download  = bios_download | cart_download;
 wire cdc_dat_download = ioctl_download & (ioctl_index[5:0] == 6'h02);
 wire cdc_sub_download = ioctl_download & (ioctl_index[5:0] == 6'h03);
@@ -464,6 +469,19 @@ wire        cart_data_en;
 wire        exp_as, exp_uds, exp_lds, exp_rw, exp_asel, exp_rom, exp_ras2, exp_fdc, exp_fdwr, exp_vclk, exp_dtack;
 wire        exp_m68k_reset, exp_m68k_halt;
 
+// TMSS boot ROM (VA4+ Mega Drive): 2KB loaded from games/MegaCD/boot2.rom, same wiring as
+// the MegaDrive core. Kept in MLABs: every M10K block is taken by the Mega CD and the VDP.
+wire  [9:0] tmss_address;
+reg  [15:0] tmss_data;
+(* ramstyle = "MLAB" *) reg [15:0] tmss_rom[1024];
+always @(posedge clk_sys) if(ioctl_wr & tmss_download & !ioctl_addr[24:11]) tmss_rom[ioctl_addr[10:1]] <= {ioctl_data[7:0],ioctl_data[15:8]};
+always @(posedge clk_md) tmss_data <= tmss_rom[tmss_address];
+
+always @(posedge clk_sys) begin
+	if(ioctl_wr & tmss_download) tmss_loaded <= 1;
+	if(sys_reset) tmss_enable <= status[9];
+end
+
 wire        vdp_hclk1;
 wire        vdp_de_h;
 wire        vdp_de_v;
@@ -533,9 +551,9 @@ md_board md_board
 	.m68k_di(m68k_data),
 
 	// no TMSS in the Mega CD core (no ROM slot for it)
-	.tmss_enable(1'b0),
-	.tmss_data(16'h0000),
-	.tmss_address(),
+	.tmss_enable(tmss_enable & tmss_loaded),
+	.tmss_data(tmss_data),
+	.tmss_address(tmss_address),
 
 	.ext_VCLK_o(VCLK),
 	.ext_ZCLK_o(ZCLK),
@@ -732,6 +750,7 @@ MCD MCD
 (
 	.RST_N(~(md_reset | btn_reset)),
 	.CLK(clk_sys),
+	.MCLK(clk_ram),   // Nuked 68000 sub-CPU model sampling clock
 	.ENABLE(1),
 	.MCD_RST_N(MCD_RST_N),
 	.PALSW(PAL),
