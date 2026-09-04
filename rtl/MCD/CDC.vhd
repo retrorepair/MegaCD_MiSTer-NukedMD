@@ -157,6 +157,10 @@ architecture rtl of CDC is
 	signal DEC_WR_EN : std_logic;
 	signal DEC_HEAD01 : std_logic_vector(15 downto 0);
 	signal DEC_HEAD23 : std_logic_vector(15 downto 0);
+	signal FRAME_CNT : unsigned(19 downto 0);	-- 75 Hz decoder frame timer (53.69 MHz clocks)
+	signal DEC_FRAME : std_logic;				-- frame boundary pulse
+	signal DEC_MID : std_logic;					-- ~40% into the frame: DECI returns to 1
+	signal SECTOR_END : std_logic;				-- a full sector arrived from the drive
 	
 --	signal DECI_WAIT_CNT : unsigned(15 downto 0);
 --	signal DECI_SET : std_logic;
@@ -304,11 +308,24 @@ begin
 			DEC_WR_EN <= '0';
 			DEC_HEAD01 <= (others => '0');
 			DEC_HEAD23 <= (others => '0');
+			SECTOR_END <= '0';
 			
 --			DECI_SET <= '0';
 --			DECI_WAIT_CNT <= (others => '0');
 		elsif rising_edge(CLK) then
 			DEC_WR <= '0';
+			SECTOR_END <= '0';
+			-- frame timer: decoder interrupt without drive data (sync insertion), flag release, decoder off
+			if CTRL0(DECEN) = '0' then
+				IFSTAT(DECI) <= '1';
+				STAT3(VALST) <= '1';
+			elsif DEC_FRAME = '1' and CTRL1(SYIEN) = '1' then
+				IFSTAT(DECI) <= '0';
+				STAT3(VALST) <= '0';
+			elsif DEC_MID = '1' then
+				IFSTAT(DECI) <= '1';
+				STAT3(VALST) <= '1';
+			end if;
 			if EN = '1' then
 				if REG_WR = '1' then
 					case AR is
@@ -368,6 +385,7 @@ begin
 --							DECI_SET <= '1';
 							IFSTAT(DECI) <= '0';
 							STAT3(VALST) <= '0';
+							SECTOR_END <= '1';
 						end if;
 						
 						if WORD_CNT = 2352/2-1 then
@@ -402,6 +420,31 @@ begin
 	DEC_ADDR <= std_logic_vector( unsigned(PT) + 2352 + DEC_POS );
 	RAM_A_WR <= DEC_ADDR(15 downto 1);
 	RAM_DO <= DEC_DAT;
+	-- 75 Hz decoder frame timer: 53693175 / 75 = 715909 clocks per frame; the sector stream from the
+	-- drive (one sector per frame) resynchronises it, so real data and the free-running frame coincide.
+	process( RESET_N, CLK )
+	begin
+		if RESET_N = '0' then
+			FRAME_CNT <= (others => '0');
+			DEC_FRAME <= '0';
+			DEC_MID <= '0';
+		elsif rising_edge(CLK) then
+			DEC_FRAME <= '0';
+			DEC_MID <= '0';
+			if CTRL0(DECEN) = '0' or SECTOR_END = '1' then
+				FRAME_CNT <= (others => '0');
+			elsif FRAME_CNT = 715908 then
+				FRAME_CNT <= (others => '0');
+				DEC_FRAME <= '1';
+			else
+				FRAME_CNT <= FRAME_CNT + 1;
+				if FRAME_CNT = 286363 then
+					DEC_MID <= '1';
+				end if;
+			end if;
+		end if;
+	end process;
+
 	RAM_WE <= DEC_WR and DEC_WR_EN and CTRL0(DECEN);
 
 	process( RESET_N, CLK )

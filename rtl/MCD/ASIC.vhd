@@ -1247,7 +1247,7 @@ begin
 				
 				if CLK_12M_F = '1' then
 					TIME_CLK_CNT <= TIME_CLK_CNT + 1;
-					if TIME_CLK_CNT = "110011011" then
+					if TIME_CLK_CNT = "101111111" then	-- 384 clocks of 12.5 MHz = 30.72 us (was 412 of 13.42 MHz)
 						TIME_CLK_CNT <= (others => '0');
 						
 						if SW_CLR = '1' then

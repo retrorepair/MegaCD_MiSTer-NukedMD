@@ -773,12 +773,25 @@ wire        MCD_RST_N;
 wire        gg_available1;
 wire        gg_available2;
 
+// The Mega CD block steps on ENABLE. The original core tied it high, running the sub-CPU, PCM chip
+// and CDC at 53.69/4 = 13.42 MHz instead of 12.5 MHz (7.4% fast) and compensated only the interrupt
+// timer divider. A 50 MHz enable restores the real rate for all of them.
+wire mcd_en;
+CEGen mcd_cegen
+(
+	.CLK(clk_sys),
+	.RST_N(~sys_reset),
+	.IN_CLK(53693175),
+	.OUT_CLK(50000000),
+	.CE(mcd_en)
+);
+
 MCD MCD
 (
 	.RST_N(~(md_reset | btn_reset)),
 	.CLK(clk_sys),
 	.MCLK(clk_ram),   // Nuked 68000 sub-CPU model sampling clock
-	.ENABLE(1),
+	.ENABLE(mcd_en),  // 50 MHz enable: the Mega CD runs from a 50 MHz crystal (sub-CPU, PCM and timer at 50/4 = 12.5 MHz)
 	.MCD_RST_N(MCD_RST_N),
 	.PALSW(PAL),
 

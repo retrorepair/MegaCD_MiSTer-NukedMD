@@ -233,3 +233,17 @@ without sectors (why CDC INIT hangs), transfer-end interrupt when one word is le
 invalid register reads, no stacking of unacknowledged DECI/DTEI, odd-length DMA rules,
 word RAM 2M-mode sub-CPU halt, COLOR CALC error 05. Main: minimum seek latency (GPGX uses
 12 frames; Thunder Storm FX).
+
+## Build 16 (2026-09-04 16:05) — clock-level fix alone changes nothing on the verificator
+IRQ 121 err06, REG 8030 1285 err07, VAR 25808 err02: identical to build 15. The bench (sim_sub)
+with an enable-timed DTACK model and periodic HALT pulses shows FX68K and Nuked wrappers cycle-
+identical, so the difference is in the real gate array timing.
+Root cause found in the Mega CD side: MCD.ENABLE was tied to 1 (original core too), so the gate
+array's CLK_CNT steps every 53.69 MHz clock and the sub-CPU, PCM chip and CDC run at 13.42 MHz
+instead of 12.5 MHz (+7.4%). srg320 compensated only the interrupt timer divider (412 instead
+of 384 -> 30.7us tick). That is why the verificator's VAR test was -4.7% upstream / -6% with
+FX68K and +8% with the die-accurate CPU: neither CPU can be right on a fast clock.
+Build 17: CEGen 53693175 -> 50000000 drives MCD.ENABLE (12.5 MHz exact on average), timer
+divider back to 384, plus the CDC 75 Hz decoder frame (DECI with DECEN+SYIEN, release at
+40%, DECI=1 when DECEN=0, resync on sector end) from the verificator/jgenesis findings.
+Expected audible side effect: PCM (RF5C164) pitch was 7.4% sharp before; now correct.
