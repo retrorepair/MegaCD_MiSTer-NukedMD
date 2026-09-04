@@ -901,6 +901,7 @@ mcd_debug mcd_debug
 	.md_reset(md_reset), .btn_reset(btn_reset), .sys_reset(sys_reset), .mcd_rst_n(MCD_RST_N),
 	.rom_cart_mode(rom_cart_mode), .region(region), .led_r(MCD_LED_RED), .led_g(MCD_LED_GREEN), .locked(locked),
 	.rom_download(rom_download), .ioctl_wr(ioctl_wr), .m68k_reset(exp_m68k_reset), .m68k_halt(exp_m68k_halt),
+	.mcd_do(MCD_DO), .sdram_dout(MCD_ROM_DO), .rom_busy(MCD_ROM_BUSY),
 	.DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD), .DDRAM_BUSY(DDRAM_BUSY)
 );
 

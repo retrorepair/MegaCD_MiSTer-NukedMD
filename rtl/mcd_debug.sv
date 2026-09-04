@@ -38,6 +38,9 @@ module mcd_debug
 	input             ioctl_wr,
 	input             m68k_reset,   // 68000 RESET pin level
 	input             m68k_halt,    // 68000 HALT pin level
+	input      [15:0] mcd_do,       // gate array data out (EXT_VDO)
+	input      [15:0] sdram_dout,   // SDRAM controller data
+	input             rom_busy,     // SDRAM port 1 busy
 
 	// DDR3
 	output reg  [7:0] DDRAM_BURSTCNT,
@@ -55,9 +58,12 @@ localparam [28:0] BASE = 29'h07C00000; // byte address 0x3E000000
 
 reg [31:0] as_cnt, exp_rd_cnt, exp_wr_cnt, late_cnt, nodtack_cnt, vs_cnt, hs_cnt, vclk_cnt, prg_cnt, cart_cnt, dl_cnt, reg_wr_cnt;
 reg [15:0] max_lat, lat;
+reg [11:0] lat_dtack, lat_busy;
+reg        seen_busy;
+reg  [1:0] s_busy;
 // trace of the first 32 bus cycles after the CPU leaves reset
 reg [63:0] trace[32];
-reg  [5:0] tr_n;
+reg  [4:0] tr_n;
 reg        cpu_live;
 reg [23:1] last_va;
 reg [15:0] last_vd;
@@ -76,6 +82,7 @@ always @(posedge clk) begin
 	s_prg_wr <= {s_prg_wr[0], prg_wr};
 	s_oe    <= {s_oe[0], cart_oe & cart_cs};
 	s_as    <= {s_as[0], exp_as};
+	s_busy  <= {s_busy[0], rom_busy};
 
 	if(s_vs == 2'b01) vs_cnt <= vs_cnt + 1'd1;
 	if(s_hs == 2'b01) hs_cnt <= hs_cnt + 1'd1;
@@ -91,7 +98,7 @@ always @(posedge clk) begin
 	if(s_as == 2'b10) begin // /AS fell
 		in_cyc <= 1;
 		as_cnt <= as_cnt + 1'd1;
-		seen_dtack <= 0; seen_rom <= 0; seen_ras2 <= 0; seen_fdc <= 0;
+		seen_dtack <= 0; seen_rom <= 0; seen_ras2 <= 0; seen_fdc <= 0; seen_busy <= 0; lat_dtack <= 0; lat_busy <= 0;
 		cyc_rw <= exp_rw;
 		lat <= 0;
 		last_va <= va;
@@ -102,14 +109,16 @@ always @(posedge clk) begin
 		if(~exp_ras2) seen_ras2 <= 1;
 		if(~exp_fdc)  seen_fdc  <= 1;
 		if(~s_dtack[1] & ~seen_dtack) begin
-			seen_dtack <= 1;
+			seen_dtack <= 1; lat_dtack <= lat[11:0];
 			if(lat > max_lat) max_lat <= lat;
 		end
+		if(s_busy == 2'b10 && ~seen_busy) begin seen_busy <= 1; lat_busy <= lat[11:0]; end
 		if(s_as == 2'b01) begin // /AS rose: end of cycle
 			in_cyc <= 0;
 			last_vd <= vd;
-			if(cpu_live && ~tr_n[5]) begin
-				trace[tr_n[4:0]] <= {last_va, cyc_rw, seen_rom, seen_ras2, seen_fdc, cart_cs, seen_dtack, lat[11:0], vd, 7'd0};
+			if(cpu_live && ~tr_n[4]) begin
+				trace[{tr_n[3:0],1'b0}] <= {last_va, cyc_rw, seen_rom, seen_ras2, seen_fdc, cart_cs, seen_dtack, lat_dtack, vd, 6'd0, seen_busy};
+				trace[{tr_n[3:0],1'b1}] <= {mcd_do, sdram_dout, lat_busy, lat[11:0], 8'd0};
 				tr_n <= tr_n + 1'd1;
 			end
 			if(seen_rom | seen_ras2 | seen_fdc) begin
@@ -160,7 +169,7 @@ always @(posedge clk) begin
 			4: DDRAM_DIN <= {nodtack_cnt, exp_wr_cnt};
 			5: DDRAM_DIN <= {last_va, 1'b0, last_vd, max_lat};
 			6: DDRAM_DIN <= {prg_cnt, cart_cnt};
-			7: DDRAM_DIN <= {vclk_cnt, hs_cnt};
+			7: DDRAM_DIN <= {vclk_cnt, dl_cnt};
 			default: DDRAM_DIN <= trace[idx[4:0]];
 		endcase
 		idx <= idx + 1'd1;
