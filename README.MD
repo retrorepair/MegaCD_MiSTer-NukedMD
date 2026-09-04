@@ -9,6 +9,8 @@ also the Nuked 68000** (the same gate-level `m68kcpu` model that serves as the m
 in place of FX68K, clocked at the Mega CD's 12.5 MHz from the board model's 107.38 MHz
 sampling clock.
 
+Resource usage, block RAM map, timing and build history: [STATS.md](STATS.md).
+
 # Installation
 - `games/MegaCD/boot.rom` - Mega CD BIOS (loaded at core start).
 - `games/MegaCD/boot2.rom` - optional Mega Drive TMSS boot ROM (2 KB, the MegaDrive core's
