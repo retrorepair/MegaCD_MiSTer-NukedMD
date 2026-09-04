@@ -260,11 +260,14 @@ wire [24:1] md_cart_addr = realtec_quirk ? {1'b0, realtec_addr} :
                            md_bank_use   ? {md_bank[cart_addr[21:19]], cart_addr[18:1]} :
                                            {1'b0, cart_addr};
 
-// SRAM
-wire md_sram_cs = rom_mode && (cart_addr[23:21] == 1) && (md_bank_sram || (cart_addr >= rom_sz && ~&cart_addr[20:19])) && ~noram_quirk;
-
-// EEPROM
-wire        md_eeprom_cs   = rom_mode && ((eeprom_quirk[3:2] == 2'b01) ? (cart_addr[23:19] == 5'b00111) : (eeprom_quirk[2:0] && ((eeprom_bank & ~cart_addr[20]) || !eeprom_quirk[3]) && cart_addr[23:21] == 3'b001));
+// SRAM / EEPROM address decodes, registered: the address settles at least one VCLK (130 ns)
+// before any strobe, so a 9.3 ns pipeline stage costs nothing and keeps the 24-bit compare
+// out of the SDRAM request path.
+reg md_sram_cs, md_eeprom_cs;
+always @(posedge clk) begin
+	md_sram_cs   <= rom_mode && (cart_addr[23:21] == 1) && (md_bank_sram || (cart_addr >= rom_sz && ~&cart_addr[20:19])) && ~noram_quirk;
+	md_eeprom_cs <= rom_mode && ((eeprom_quirk[3:2] == 2'b01) ? (cart_addr[23:19] == 5'b00111) : (eeprom_quirk[2:0] && ((eeprom_bank & ~cart_addr[20]) || !eeprom_quirk[3]) && cart_addr[23:21] == 3'b001));
+end
 wire [15:0] md_eeprom_data;
 
 always_comb begin

@@ -594,7 +594,7 @@ md_board md_board
 	.exp_dtack(exp_dtack),
 	.exp_m68k_reset(exp_m68k_reset),
 	.exp_m68k_halt(exp_m68k_halt),
-	.exp_data(MCD_DO),
+	.exp_data(mcd_do_r),
 	.exp_data_en(exp_data_en),
 
 	// video
@@ -680,8 +680,8 @@ dpram #(13,8) ram_z80k
 // to start its SDRAM accesses at /AS time: /AS is used as the qualifier where
 // the VHDL expected /ASEL. Everything else is the raw pin.
 
-wire        ext_dtack   = ~MCD_DTACK_N;              // the gate array asserts /DTACK on the bus
-wire        exp_data_en = ~MCD_DTACK_N & exp_rw;     // and drives the data bus for reads
+wire        ext_dtack;                               // the gate array asserts /DTACK on the bus
+wire        exp_data_en;                             // and drives the data bus for reads (defined below)
 
 // /RAS2 is a DRAM row strobe. Besides word RAM accesses the arbiter pulses it to refresh the
 // expansion DRAM: CAS-before-RAS inside refresh-marked cycles and RAS-only (row address =
@@ -701,6 +701,33 @@ wire dma_rd    = cart_dma & cart_oe;
 wire ext_sel_n = exp_as & ~dma_rd;
 wire ext_uds_n = exp_uds & ~dma_rd;
 wire ext_lds_n = exp_lds & ~dma_rd;
+
+// The gate array VHDL is a 53.69 MHz synchronous design; the board model's bus registers run
+// at 107.38 MHz. One register stage in each direction (the bus buffers on the real Mega CD
+// board) keeps every path inside one clock period: the gate array decode is launched from and
+// captured by 53.69 MHz registers, and the board model sees registered DTACK/data. Cost:
+// 18.6 ns each way out of the ~230 ns the fixed 68000 cycle leaves.
+reg [17:1] mcd_va;
+reg [15:0] mcd_vdi;
+reg        mcd_as_n, mcd_rnw, mcd_lds_n, mcd_uds_n, mcd_sel_n, mcd_ras2_n, mcd_rom_n, mcd_fdc_n;
+reg [15:0] mcd_do_r;
+reg        mcd_dtack_n_r;
+always @(posedge clk_sys) begin
+	mcd_va      <= cart_addr[17:1];
+	mcd_vdi     <= cart_data_wr;
+	mcd_as_n    <= exp_as;
+	mcd_rnw     <= exp_rw;
+	mcd_lds_n   <= ext_lds_n;
+	mcd_uds_n   <= ext_uds_n;
+	mcd_sel_n   <= ext_sel_n;
+	mcd_ras2_n  <= ~exp_ras2_acc;
+	mcd_rom_n   <= exp_rom;
+	mcd_fdc_n   <= exp_fdc;
+	mcd_do_r    <= MCD_DO;
+	mcd_dtack_n_r <= MCD_DTACK_N;
+end
+assign ext_dtack   = ~mcd_dtack_n_r;
+assign exp_data_en = ~mcd_dtack_n_r & exp_rw;
 
 ///////////////////////////////////////////////////
 // Mega CD
@@ -755,19 +782,19 @@ MCD MCD
 	.MCD_RST_N(MCD_RST_N),
 	.PALSW(PAL),
 
-	.EXT_VA(cart_addr[17:1]),
-	.EXT_VDI(cart_data_wr),
+	.EXT_VA(mcd_va),
+	.EXT_VDI(mcd_vdi),
 	.EXT_VDO(MCD_DO),
-	.EXT_AS_N(exp_as),
-	.EXT_RNW(exp_rw),
-	.EXT_LDS_N(ext_lds_n),
-	.EXT_UDS_N(ext_uds_n),
+	.EXT_AS_N(mcd_as_n),
+	.EXT_RNW(mcd_rnw),
+	.EXT_LDS_N(mcd_lds_n),
+	.EXT_UDS_N(mcd_uds_n),
 	.EXT_DTACK_N(MCD_DTACK_N),
-	.EXT_ASEL_N(ext_sel_n),
+	.EXT_ASEL_N(mcd_sel_n),
 	.EXT_VCLK_CE(1'b0),
-	.EXT_RAS2_N(~exp_ras2_acc),
-	.EXT_ROM_N(exp_rom),
-	.EXT_FDC_N(exp_fdc),
+	.EXT_RAS2_N(mcd_ras2_n),
+	.EXT_ROM_N(mcd_rom_n),
+	.EXT_FDC_N(mcd_fdc_n),
 
 	.PRG_A(MCD_PRG_ADDR),
 	.PRG_DI(MCD_PRG_DI),
