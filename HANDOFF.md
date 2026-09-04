@@ -247,3 +247,13 @@ Build 17: CEGen 53693175 -> 50000000 drives MCD.ENABLE (12.5 MHz exact on averag
 divider back to 384, plus the CDC 75 Hz decoder frame (DECI with DECEN+SYIEN, release at
 40%, DECI=1 when DECEN=0, resync on sector end) from the verificator/jgenesis findings.
 Expected audible side effect: PCM (RF5C164) pitch was 7.4% sharp before; now correct.
+
+## Build 17 (2026-09-04 16:50) — 12.5 MHz: REG 8030 passes; PRG-RAM wait states now visible
+Verificator: REG 8030 OK (timer vs sub-CPU correct at 12.5 MHz), IRQ 106/128 err06, VAR 27906
+err02 (expected 23753-23980), CDC INIT still hangs, BIOS boots. With the die-accurate CPU on
+the right clock, the sub-CPU's memory path is ~17% slower than real hardware: SDRAM-backed
+PRG-RAM (and word RAM through the ASIC state machines) return DTACK 2-3 CPU clocks after /AS,
+where real DRAM gives ~1 wait state. FX68K hid this by accepting a late DTACK in the same
+cycle. Next: MCD-level bench (real ASIC + sdram + Nuked CPU) to count clocks per access type,
+then shorten the PRG-RAM/word RAM acknowledge path (speculative SDRAM read on address valid).
+37,309 ALMs (89%).
