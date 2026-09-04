@@ -191,3 +191,13 @@ User reports intermittent audio pops/wobble (build 12): consistent with marginal
 Next: register the MCD expansion interface in the 53.69MHz domain (inputs and DTACK/DO
 outputs: +37ns round trip, within the measured ~230ns CPU margin; DMA-from-ROM margin to be
 verified on hardware), register mcd_cart's address decodes, then seed sweep.
+
+## Build 14 (2026-09-04 14:00) — registered MCD interface; PSG filter paths are false
+BIOS and cartridge fine, late=0, maxlat 29 (BIOS) / 19 (cart): the +37ns interface latency
+is absorbed. Fit 36,992 ALMs (88%), 519 M10K. Timing: -2.22ns@107 (TNS -967),
+-2.47ns@53.7 (TNS -74, down from -338). The gate array paths are gone from the worst list;
+the whole 53.7MHz worst-40 is now audio_cond|psg_iir (inp -> iir_tap intreg), which is a
+false path: every register in sys/iir_filter.v is written under `if (ce)` (7.056MHz), so
+register-to-register paths inside it span >= 7 clocks. Added a multicycle (setup 4 / hold 3)
+for psg_iir in MegaCD.sdc. sta_paths.tcl now also writes worst_paths_107.txt /
+worst_paths_53.txt per clock. User reports no audible distortion on build 13 (was on 12).
