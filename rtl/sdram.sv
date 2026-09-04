@@ -104,7 +104,7 @@ localparam STATE_CONT  = STATE_START+RASCAS_DELAY;
 localparam STATE_READY = STATE_CONT+CAS_LATENCY+1'd1;
 localparam STATE_LAST  = STATE_READY;      // last state in cycle
 
-reg  [2:0] state;
+reg  [2:0] state = 0;
 reg [22:1] a;
 reg [15:0] data;
 reg        we;
@@ -226,7 +226,7 @@ localparam MODE_LDM    = 2'b10;
 localparam MODE_PRE    = 2'b11;
 
 // initialization
-reg [1:0] mode;
+reg [1:0] mode = 0;
 reg [4:0] reset=5'h1f;
 always @(posedge clk) begin
 	reg init_old=0;
