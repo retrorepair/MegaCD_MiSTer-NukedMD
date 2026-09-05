@@ -67,6 +67,13 @@ module mcd_debug
 	input             s68k_dtack_n,
 	input       [3:0] s68k_a,       // A19..A16
 
+	// PCM chip (53 MHz domain, sampled)
+	input             pcm_smp_ce,   // sample enable (should be 520832 Hz)
+	input             pcm_late,     // sample fetch from SDRAM did not return before the next address
+	input             pcm_we_n,     // PCM write strobe (from the sub-CPU or DMA)
+	input             pcm_cs_n,     // PCM chip select
+	input             s68k_ce_f,    // 12.5 MHz falling-edge enable (the PCM samples its strobes on it)
+
 	// DDR3
 	output reg  [7:0] DDRAM_BURSTCNT,
 	output reg [28:0] DDRAM_ADDR,
@@ -207,6 +214,29 @@ always @(posedge clk) begin
 	end
 end
 
+// PCM statistics: sample enable rate, late fetches, write strobes issued vs. seen through the
+// chip's CE_F sampling (a strobe edge that falls between two CE_F samples is a lost write)
+reg  [1:0] sp_ce, sp_late, sp_we, sp_cef;
+reg        we_at_cef, we_at_cef_old;
+reg [31:0] smp_ce_cnt, pcm_late_cnt, pcm_wr_cnt, pcm_wr_seen_cnt, cef_cnt;
+always @(posedge clk) begin
+	sp_ce   <= {sp_ce[0], pcm_smp_ce};
+	sp_late <= {sp_late[0], pcm_late};
+	sp_we   <= {sp_we[0], pcm_we_n | pcm_cs_n};   // low = a PCM write is asserted
+	sp_cef  <= {sp_cef[0], s68k_ce_f};
+	if(~old_dl & rom_download) begin
+		smp_ce_cnt <= 0; pcm_late_cnt <= 0; pcm_wr_cnt <= 0; pcm_wr_seen_cnt <= 0; cef_cnt <= 0;
+	end
+	if(sp_ce == 2'b01) smp_ce_cnt <= smp_ce_cnt + 1'd1;
+	if(sp_late == 2'b01) pcm_late_cnt <= pcm_late_cnt + 1'd1;
+	if(sp_we == 2'b10) pcm_wr_cnt <= pcm_wr_cnt + 1'd1;             // strobe asserted (raw)
+	if(sp_cef == 2'b01) begin                                        // as the chip samples it: one sample per CE_F
+		cef_cnt <= cef_cnt + 1'd1;
+		we_at_cef <= sp_we[1];
+		if(we_at_cef & ~sp_we[1]) pcm_wr_seen_cnt <= pcm_wr_seen_cnt + 1'd1; // 1 -> 0 between consecutive samples
+	end
+end
+
 // periodic record write
 reg [20:0] tick;
 reg [31:0] seq;
@@ -248,7 +278,10 @@ always @(posedge clk) begin
 			15: DDRAM_DIN <= {sub_max[3], sub_min[3], sub_long[3]};
 			16: DDRAM_DIN <= {sub_cnt[4], sub_sum[4]};
 			17: DDRAM_DIN <= {sub_max[4], sub_min[4], sub_long[4]};
-			18,19,20,21,22,23: DDRAM_DIN <= 64'd0;
+			18: DDRAM_DIN <= {smp_ce_cnt, cef_cnt};
+			19: DDRAM_DIN <= {pcm_wr_cnt, pcm_wr_seen_cnt};
+			20: DDRAM_DIN <= {pcm_late_cnt, 32'd0};
+			21,22,23: DDRAM_DIN <= 64'd0;
 			default: DDRAM_DIN <= trace[idx[3:0]];
 		endcase
 		idx <= idx + 1'd1;

@@ -79,6 +79,11 @@ entity MCD is
 		-- bring-up telemetry: sub-CPU bus cycle observation
 		DBG_S68K_AS_N	: out std_logic;
 		DBG_S68K_DTACK_N : out std_logic;
+		DBG_PCM_SMP_CE	: out std_logic;
+		DBG_PCM_LATE	: out std_logic;
+		DBG_PCM_WE_N	: out std_logic;
+		DBG_PCM_CS_N	: out std_logic;
+		DBG_S68K_CE_F	: out std_logic;
 		
 		DBG_S68K_A		: out std_logic_vector(23 downto 0)
 	);
@@ -189,6 +194,7 @@ architecture rtl of MCD is
 			cpu_rdy       : out std_logic;
 			smp_addr      : in  std_logic_vector(15 downto 0);
 			smp_dout      : out std_logic_vector(7 downto 0);
+		late			: out std_logic;
 			mem_addr      : out std_logic_vector(15 downto 0);
 			mem_din       : out std_logic_vector(7 downto 0);
 			mem_rd        : out std_logic;
@@ -252,6 +258,9 @@ begin
 
 	DBG_S68K_AS_N <= S68K_AS_N;
 	DBG_S68K_DTACK_N <= S68K_DTACK_N;
+	DBG_PCM_WE_N <= PCM_WE_N;
+	DBG_PCM_CS_N <= PCM_N;
+	DBG_S68K_CE_F <= S68K_CE_F;
 	
 	ASIC : entity work.ASIC
 	port map(
@@ -446,7 +455,8 @@ begin
 		RAM_DI_B		=> PCM_RAM_DI_B,
 		
 		SL   			=> PCM_SL,
-		SR   			=> PCM_SR
+		SR   			=> PCM_SR,
+		DBG_SAMPLE_CE => DBG_PCM_SMP_CE
 	);
 	
 	-- PCM wave RAM lives in SDRAM (not enough M10K with the NukedMD chipset), see pcm_mem.sv
@@ -462,6 +472,7 @@ begin
 		cpu_rdy		=> PCM_RDY,
 		smp_addr		=> PCM_RAM_ADDR_B,
 		smp_dout		=> PCM_RAM_DI_B,
+		late			=> DBG_PCM_LATE,
 		mem_addr		=> PCMRAM_A,
 		mem_din		=> PCMRAM_DO,
 		mem_rd		=> PCMRAM_RD,

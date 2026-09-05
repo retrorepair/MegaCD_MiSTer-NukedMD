@@ -39,6 +39,9 @@ def show(w):
         avg = ssum / cnt
         print('  sub %-8s n=%-9d AS->DTACK avg=%6.1fns (%4.2f clk) min=%5.1fns max=%6.1fns  >8clk=%d'
               % (REGIONS[r], cnt, avg * TICK_NS, avg * TICK_NS / CPU_CLK_NS, mn * TICK_NS, mx * TICK_NS, long_))
+    smp_ce = w[18] >> 32; cef = w[18] & 0xFFFFFFFF
+    pcm_wr = w[19] >> 32; pcm_seen = w[19] & 0xFFFFFFFF; pcm_late = w[20] >> 32
+    print('  pcm sample_ce=%d ce_f=%d writes=%d seen_by_chip=%d late_fetch=%d' % (smp_ce, cef, pcm_wr, pcm_seen, pcm_late))
     for i in range(8):
         a = w[24 + 2*i]; b = w[25 + 2*i]
         if a == 0 and b == 0: continue

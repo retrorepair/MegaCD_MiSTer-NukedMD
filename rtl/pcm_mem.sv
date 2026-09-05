@@ -33,6 +33,7 @@ module pcm_mem
 
 	input      [15:0] smp_addr,
 	output reg  [7:0] smp_dout,
+	output reg        late,       // telemetry: the chip moved to a new sample before the previous fetch returned
 
 	// SDRAM port (busy-style, request is a level)
 	output reg [15:0] mem_addr,
@@ -88,9 +89,11 @@ always @(posedge clk) begin
 			rd_pend <= 1;
 			rd_addr <= cpu_addr;
 		end
+		late <= 0;
 		if(smp_addr != smp_addr_q) begin
 			smp_addr_q <= smp_addr;
 			smp_req <= 1;
+			if(smp_req) late <= 1;   // previous sample never delivered
 		end
 
 		case(state)

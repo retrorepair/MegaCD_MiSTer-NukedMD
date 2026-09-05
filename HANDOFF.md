@@ -332,3 +332,14 @@ Build 24 timing -3.95@107 / -1.61@53.7: worst paths md_reset -> VD mux / ram_68k
 SDC: md_reset / sys_reset multicycle setup 3 / hold 2. mcd_cart.sv: the clk_sys mapper, EEPROM
 and protection blocks work from clk_sys-registered copies of the bus inputs and reset
 (cart_addr_s etc.); the 107 MHz data-response path is unchanged.
+
+## Build 25 (2026-09-05 12:40) — timing changes; not deployed
+37,676 ALMs, -2.97@107 (VDP io_address -> ram_68k address), -0.74@53.7 (VDP DMA control ->
+mcd_lds_n/mcd_sel_n interface registers: dma_rd = cart_dma & cart_oe, and cart_oe is
+combinational deep inside the VDP). The reset multicycle removed the md_reset paths.
+NTSC investigation: forcing the OSD region with a mismatching BIOS makes every BIOS halt at
+0x7E0 by design (A10001 region-bit check, error message). A US image mounted from the share
+(Main loads usa/cd_bios.rom) boots in NTSC on build 24 (3 Ninjas Kick Back title screen).
+The user hears PCM-only warble in NTSC (PAL fine) since ~build 18. Build 26 adds PCM
+telemetry: sample-enable rate, CE_F rate, PCM write strobes raw vs. as sampled by the chip
+on CE_F, and late SDRAM sample fetches.

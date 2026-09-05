@@ -28,7 +28,8 @@ entity PCM is
 		RAM_DI_B		: in std_logic_vector(7 downto 0);
 		
 		SL				: out signed(15 downto 0);
-		SR				: out signed(15 downto 0)
+		SR				: out signed(15 downto 0);
+		DBG_SAMPLE_CE : out std_logic	-- telemetry
 	);
 end PCM;
 
@@ -283,6 +284,7 @@ begin
 
 	
 	SL <= LOUT;
+	DBG_SAMPLE_CE <= SAMPLE_CE;
 	SR <= ROUT;
 
 end rtl;
