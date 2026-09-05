@@ -497,3 +497,20 @@ Genesis master clock. The repo now carries this (mcd_cegen IN_CLK by region, CDC
 PALSW). Verificator consequence: VAR / IRQ 09 / REG 8030 are 60 Hz-ratio windows; in a 50 Hz
 console (real or emulated) they read 0.9% off. Build 31 = this + registered sub-CPU outputs
 + work RAM write stage, compiling as seeds 2 and 3 (scratchpad seed3/ and seed2/).
+
+## 2026-09-05 19:55 — reference material (jgenesis / GPGX / upstream) and what it settles
+- Stock MegaCD_MiSTer (issue 50, screenshot 2025-06-21, run as CD boot ROM): COLOR CALC 05,
+  VAR 22744 err 02, IRQ 223 err 09, REG 8030 1299 err 07, CDC REGS 01, hangs at CDC INIT.
+  This core (build 30, NTSC): VAR OK, IRQ err 0A, REG 8030 OK - ahead of upstream on timing.
+- GPGX issue 408: a European Model 1 Mega CD run showed the timing errors ("only NTSC seems to
+  have been tested on krikzz's end") - real 50 Hz hardware fails VAR/IRQ/REG 8030 windows, so
+  variant B (fixed 50 MHz CD clock) is confirmed by hardware, not just by emulators.
+- CDC REGS: passes only on CDX/Multi-Mega/X'Eye/Wondermega M2 (LC8913 CDC, 5-bit address
+  register); confirmed by the BlastEm author on most models. Not a defect of this core.
+- ekeeke fixed every verificator test in GPGX with one commit each (issue 408): the roadmap.
+  First one applied here: COLOR CALC 05 = FF804C font colour byte write at the even address
+  must not be ignored (/LDS,/UDS irrelevant; GPGX 58accf0). ASIC.vhd FF804C write ungated.
+  Remaining from that list: CDC INIT 04, CDC DMA3 02/04/13/20/21/42-56/60-63, CDC FLAGS
+  22/26/27/30/40-42/46, REG X002 03/29/2B, REG 2006 02/03/05 (as CD boot ROM), WORD RAM 20.
+- jgenesis 178 (Thunder Storm FX) and 100 (Radical Rex): drive-side behaviours, see
+  tools/main_patches/README.md.
