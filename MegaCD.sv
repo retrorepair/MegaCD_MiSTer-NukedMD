@@ -154,6 +154,7 @@ localparam CONF_STR = {
 	"MegaCD;;",
 	"S0,CUECHD,Insert Disk;",
 	"FS6,BINGENMD,Insert Cartridge;",
+	"O[36],Disc Insert,Reset,Keep Running;",
 	"d3O[9],TMSS,Disabled,Enabled;",
 	"-;",
 	"h6O[7:6],Region,Auto(JP),JP,US,EU;",
@@ -346,7 +347,21 @@ always @(posedge clk_sys) begin
 end
 
 // Main sends boot.rom as index 00, cart.rom next to a CD as 40, boot2.rom (TMSS) as 80.
-wire bios_download = ioctl_download & (ioctl_index[7:6] == 2'b00) & (ioctl_index[5:0] <= 6'h01);
+// "Disc Insert: Keep Running" (test aid): Main re-sends the BIOS and pulses status[0] on every image
+// mount; with the option on, both are ignored once a BIOS is running, so a disc can be swapped
+// without restarting the core (as on hardware, where the BIOS notices the new disc through the CDD).
+// The OSD "Reset & Eject CD" is masked as well while it is on: use the main menu Reset instead.
+wire cd_keep      = status[36];
+reg  bios_loaded  = 0;
+wire bios_dl_raw  = ioctl_download & (ioctl_index[7:6] == 2'b00) & (ioctl_index[5:0] <= 6'h01);
+wire keep_running = cd_keep & bios_loaded;
+wire bios_download = bios_dl_raw & ~keep_running;
+wire host_reset    = status[0] & ~keep_running;
+always @(posedge clk_sys) begin
+	reg old_dl;
+	old_dl <= bios_dl_raw;
+	if(old_dl & ~bios_dl_raw) bios_loaded <= 1;
+end
 wire cart_download = ioctl_download & ((ioctl_index[5:0] == 6'h06) | ((ioctl_index[7:6] == 2'b01) & (ioctl_index[5:0] <= 6'h01))); // OSD "Insert Cartridge" or cart.rom next to the CD
 wire tmss_download = ioctl_download & (ioctl_index == 8'h80);                                                                    // games/MegaCD/boot2.rom
 wire rom_download  = bios_download | cart_download;
@@ -390,7 +405,7 @@ end
 ///////////////////////////////////////////////////
 // Resets and clock enables (same scheme as the MegaDrive HAL)
 
-wire reset   = status[0] | buttons[1] | region_set;
+wire reset   = host_reset | buttons[1] | region_set;
 wire cart_clearing;
 wire loading = rom_download | bk_loading | RESET | cart_clearing; // the cartridge SRAM clear (~15ms) outlasts the download; keep the 68000 in reset until it is done
 
@@ -1697,7 +1712,7 @@ always @(posedge clk_sys) begin
 	old_cart_dl <= cart_download;
 	old_bios_dl <= bios_download;
 	if(~old_cart_dl & cart_download) rom_cart_mode <= 1;
-	if((~old_bios_dl & bios_download) | status[0]) rom_cart_mode <= 0;
+	if((~old_bios_dl & bios_download) | host_reset) rom_cart_mode <= 0;
 end
 
 ///////////////////////////////////////////////

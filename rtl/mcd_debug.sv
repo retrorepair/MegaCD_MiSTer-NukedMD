@@ -219,6 +219,7 @@ end
 reg  [1:0] sp_ce, sp_late, sp_we, sp_cef;
 reg        we_at_cef, we_at_cef_old;
 reg [31:0] smp_ce_cnt, pcm_late_cnt, pcm_wr_cnt, pcm_wr_seen_cnt, cef_cnt;
+reg [31:0] ce_hi_cnt;                                               // 107 MHz clocks with pcm_smp_ce high (level, no edge detect)
 always @(posedge clk) begin
 	sp_ce   <= {sp_ce[0], pcm_smp_ce};
 	sp_late <= {sp_late[0], pcm_late};
@@ -228,6 +229,7 @@ always @(posedge clk) begin
 		smp_ce_cnt <= 0; pcm_late_cnt <= 0; pcm_wr_cnt <= 0; pcm_wr_seen_cnt <= 0; cef_cnt <= 0;
 	end
 	if(sp_ce == 2'b01) smp_ce_cnt <= smp_ce_cnt + 1'd1;
+	if(sp_ce[0]) ce_hi_cnt <= ce_hi_cnt + 1'd1;
 	if(sp_late == 2'b01) pcm_late_cnt <= pcm_late_cnt + 1'd1;
 	if(sp_we == 2'b10) pcm_wr_cnt <= pcm_wr_cnt + 1'd1;             // strobe asserted (raw)
 	if(sp_cef == 2'b01) begin                                        // as the chip samples it: one sample per CE_F
@@ -281,7 +283,9 @@ always @(posedge clk) begin
 			18: DDRAM_DIN <= {smp_ce_cnt, cef_cnt};
 			19: DDRAM_DIN <= {pcm_wr_cnt, pcm_wr_seen_cnt};
 			20: DDRAM_DIN <= {pcm_late_cnt, 32'd0};
-			21,22,23: DDRAM_DIN <= 64'd0;
+			21: DDRAM_DIN <= {seq, 32'hFEEDC0DE};                      // freshness check: must track word 1's seq
+			22: DDRAM_DIN <= {11'd0, tick, 24'd0, sp_ce, sp_late, sp_we, sp_cef}; // live samples of the PCM synchronizers
+			23: DDRAM_DIN <= {ce_hi_cnt, 32'd0};
 			default: DDRAM_DIN <= trace[idx[3:0]];
 		endcase
 		idx <= idx + 1'd1;

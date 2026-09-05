@@ -27,6 +27,11 @@ About 150 games tested without long playing, US/EU regions only.
 the real machine. Mappers as in the MegaDrive core (SSF2, SRAM, 24Cxx EEPROM, Pier Solar,
 Realtec, SF-00x, J-Cart, Sega Channel, per-game lightgun and YM2612 quirks); no SVP.
 "Reset & Eject CD" or loading a BIOS returns to Mega CD mode. The file browser opens in
+
+"Disc Insert: Keep Running" (test aid, default Reset) lets a CD image be mounted without
+restarting the core: the BIOS re-send and the reset pulse that Main issues on every mount are
+ignored once a BIOS is running, so the running BIOS sees the new disc through the drive status
+as on hardware. While it is on, "Reset & Eject CD" is masked too; use the main menu Reset.
 the MegaCD folder (a Main limitation); navigate up to games/MegaDrive once per session.
 
 ### Known issues:

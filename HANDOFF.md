@@ -343,3 +343,30 @@ NTSC investigation: forcing the OSD region with a mismatching BIOS makes every B
 The user hears PCM-only warble in NTSC (PAL fine) since ~build 18. Build 26 adds PCM
 telemetry: sample-enable rate, CE_F rate, PCM write strobes raw vs. as sampled by the chip
 on CE_F, and late SDRAM sample fetches.
+
+## Build 26 (2026-09-05 13:36) — PCM telemetry lands, but reads zero
+Deployed (md5 5e941107); Final Fight CD (USA) boots in NTSC. The sub-CPU statistics count
+normally, but record words 18-20 (sample_ce, ce_f, writes, seen_by_chip, late_fetch) read 0,
+before and after a core reload. Checked: the rbf on the card is build 26; the fitted netlist
+(quartus_sta get_fanins) has sp_ce/sp_late/sp_we/sp_cef fed by PCM CEGen CE, pcm_mem late, the
+sub-CPU strobes + PCM_DMA_WR and ASIC CLK_CNT/EN50, and the counters feed DDRAM_DIN. The
+record is one 40-beat burst at a fixed address (DDRAM_ADDR[0..21] constant). Open question:
+are words 18-23 written at all (planting a marker from Linux was not possible: the MiSTer
+went offline). Build 27 answers it by design (word 21 = {seq, FEEDC0DE}, word 22 = live
+synchronizer bits, word 23 = 107 MHz clocks with pcm_smp_ce high).
+
+## Build 27 (2026-09-05 16:25) — "Disc Insert: Keep Running" test aid + telemetry freshness
+OSD: "Disc Insert: Reset / Keep Running" (status[36]). Main re-sends cd_bios.rom and pulses
+status[0] on every image mount; with Keep Running on and a BIOS already loaded, the BIOS
+download is ignored (bios_download masked, so no reset, no SDRAM write, no rom_cart_mode
+clear, region unchanged) and status[0] is ignored (host_reset). The OSD "Reset & Eject CD" is
+masked too while it is on (main menu Reset still works). Purpose: run the verificator's CDC
+tests (CDC INIT needs a mounted disc) and swap discs without restarting the core, as on
+hardware where the BIOS sees the new disc through the CDD status.
+PCM path review while waiting for hardware: PCM.vhd needs each channel's sample from RAM
+within one 520.8 kHz slot (address changes every second SAMPLE_CE, loop-marker check after
+one slot, sample used after two); pcm_mem.sv fetches from SDRAM port 3 (lowest priority but
+the other ports issue one 7-clock access at a time, so starvation looks unlikely); the gate
+array's CDC->PCM DMA writes one byte per ~6 sub-CPU clocks without checking PCM_RDY (a write
+into a full 8-entry FIFO is dropped, needs >4 us of SDRAM starvation). The late_fetch counter
+(build 26/27) decides whether the SDRAM path is the NTSC PCM warble.
