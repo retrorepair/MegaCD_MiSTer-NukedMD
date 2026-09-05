@@ -40,3 +40,7 @@ c5_pin_model_dump.txt
 deploy.sh
 build.log
 *.log
+sim/*/work/
+sim/*/worknk/
+sim/*/transcript
+sim/*/*.wlf
