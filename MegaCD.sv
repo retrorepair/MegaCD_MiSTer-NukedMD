@@ -354,13 +354,23 @@ end
 wire cd_keep      = status[36];
 reg  bios_loaded  = 0;
 wire bios_dl_raw  = ioctl_download & (ioctl_index[7:6] == 2'b00) & (ioctl_index[5:0] <= 6'h01);
-wire keep_running = cd_keep & bios_loaded;
+// Main's start-up sequence sends the BIOS, then resets the core (status[0] pulse) and sends the BIOS
+// once more; the BIOS needs that restart to come up after Main's drive is initialised (with the
+// pulse masked the JP BIOS stays on its intro clouds waiting for the drive). So the masking is armed
+// only 3 s after the first BIOS load: it then covers disc mounts done while a BIOS is running.
+reg [27:0] keep_arm_cnt = 0;
+reg        keep_armed = 0;
+wire keep_running = cd_keep & keep_armed;
 wire bios_download = bios_dl_raw & ~keep_running;
 wire host_reset    = status[0] & ~keep_running;
 always @(posedge clk_sys) begin
 	reg old_dl;
 	old_dl <= bios_dl_raw;
 	if(old_dl & ~bios_dl_raw) bios_loaded <= 1;
+	if(bios_loaded & ~keep_armed) begin
+		keep_arm_cnt <= keep_arm_cnt + 1'd1;
+		if(keep_arm_cnt == 28'd161_000_000) keep_armed <= 1;   // 3 s at 53.7 MHz
+	end
 end
 wire cart_download = ioctl_download & ((ioctl_index[5:0] == 6'h06) | ((ioctl_index[7:6] == 2'b01) & (ioctl_index[5:0] <= 6'h01))); // OSD "Insert Cartridge" or cart.rom next to the CD
 wire tmss_download = ioctl_download & (ioctl_index == 8'h80);                                                                    // games/MegaCD/boot2.rom

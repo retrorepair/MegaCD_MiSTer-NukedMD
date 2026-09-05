@@ -519,3 +519,16 @@ console (real or emulated) they read 0.9% off. Build 31 = this + registered sub-
   Multi-Mega / X'Eye / Wondermega M2 CDC (LC8913/LC89513, 5-bit address register) passes them.
   This is the origin of the earlier "model 2 fails CDC REGS 01 / CDC FLAGS 40" note (not an
   owner measurement). The core models the Model 1/2 CDC, so CDC REGS 01 is correct behaviour.
+
+## Build 31 (2026-09-05 20:31) — deployed; Keep Running (as built) breaks the BIOS boot
+Seed 2: 37,843 ALMs, -2.03 @107 (TNS -360, was -703), +0.23 @53.7; seed 3: -2.19 / -0.68.
+Remaining 107 MHz failures all end at the board's VD bus register fed by the VDP address decode
+(AS, _M3, io_address, w100/w124/w45 -> VD[12]): the chipset's own bus mux at 90% fill.
+NTSC verificator: VAR OK, REG 8030 OK, IRQ 0A, COLOR CALC 05, CDC REGS 01 (as build 30).
+JP BIOS, no disc: with Keep Running ON (CFG byte4 0x10) the BIOS stays on the intro clouds,
+main CPU polling A1200E - Main's start-up reset pulse / second BIOS send were masked and the
+BIOS never restarts after the drive is initialised. Builds 30/31 "silent" runs were this, not
+a wrapper regression. With Keep Running OFF the JP BIOS boots to its menu with music on build
+31: 3 s captured (12 windows), no single-sample spike above 3000 in the chip output, 28 above
+2000 clustered in a 4 ms burst (likely programme material). Fix committed: the masking arms
+3 s after the first BIOS load (build 32). The CFG bit is now OFF on the card.
