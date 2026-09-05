@@ -256,6 +256,9 @@ reg        ifl_cyc, irq_run;
 reg  [1:0] s_cdsend, s_cdrec;
 reg [15:0] cdd_send_cnt, cdd_rec_cnt;                                // CDD command / status handshakes with the HPS
 reg [22:0] sub_last_reg;                                            // A23..A1 of the sub-CPU's last gate array / PCM access
+// last 32 sub-CPU bus addresses (every /AS fall): an instruction-level trace of where the sub-CPU spins
+reg [31:0] sub_ring[32];
+reg  [4:0] sub_rp = 0;
 reg [15:0] irq_t, irq_lat_last, irq_lat_max, win_last, win_min;
 always @(posedge clk) begin
 	ss_rnw <= {ss_rnw[0], s68k_rnw};
@@ -264,6 +267,7 @@ always @(posedge clk) begin
 	if(s_cdsend == 2'b01) cdd_send_cnt <= cdd_send_cnt + 1'd1;
 	if(s_cdrec == 2'b01) cdd_rec_cnt <= cdd_rec_cnt + 1'd1;
 	if(ss_as == 2'b10 && region_of == 3'd2) sub_last_reg <= s68k_a;
+	if(ss_as == 2'b10) begin sub_ring[sub_rp] <= {8'd0, ss_rnw[1], s68k_a}; sub_rp <= sub_rp + 1'd1; end
 	if(s_as == 2'b10) ifl_cyc <= ~exp_rw & (va == 23'h509000);          // main /AS fell on a write to A12000
 	if(~old_dl & rom_download) begin
 		irq_lat_last <= 0; irq_lat_max <= 0; win_last <= 0; win_min <= 16'hFFFF; irq_run <= 0;
@@ -359,11 +363,11 @@ always @(posedge clk) begin
 			17: DDRAM_DIN <= {sub_max[4], sub_min[4], sub_long[4]};
 			18: DDRAM_DIN <= {smp_ce_cnt, cef_cnt};
 			19: DDRAM_DIN <= {pcm_wr_cnt, pcm_wr_seen_cnt};
-			20: DDRAM_DIN <= {pcm_late_cnt, 19'd0, cap_ptr};
+			20: DDRAM_DIN <= {pcm_late_cnt, 14'd0, sub_rp, cap_ptr};   // sub address ring write pointer, PCM capture pointer
 			21: DDRAM_DIN <= {seq, cdd_send_cnt, cdd_rec_cnt};             // freshness (seq copy) + CDD handshake counters
 			22: DDRAM_DIN <= {win_min, win_last, 1'b0, sub_last_reg, sp_ce, sp_late, sp_we, sp_cef}; // INT2 window, last sub register address, live PCM synchronizer samples
 			23: DDRAM_DIN <= {ce_hi_cnt, irq_lat_max, irq_lat_last};
-			default: DDRAM_DIN <= trace[idx[3:0]];
+			default: DDRAM_DIN <= {sub_ring[{idx[3:0],1'b1}], sub_ring[{idx[3:0],1'b0}]}; // words 24-39: sub-CPU address ring, two entries per word (DMA trace retired)
 		endcase
 		idx <= idx + 1'd1;
 		if(idx == 39) busy_w <= 0;
