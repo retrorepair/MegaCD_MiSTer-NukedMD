@@ -448,3 +448,16 @@ The remaining fit-dependent paths are in the main-side glue (md_board RW -> ram_
 enable, VDP DMA control -> mcd_sel_n/mcd_uds_n) and are the next timing target.
 Build 29 (main tree, compiling) = PCM output capture on the OLD wrapper, kept as a baseline;
 build 30 = seeds 2 and 3 of the fixed sources (scratchpad seed2/ seed3/).
+
+## Build 30 (2026-09-05 19:02) — sub-CPU outputs registered at MCLK, region-proper clocks; deployed
+Seed 2: 37,653 ALMs, -1.91 @107 (TNS -703), **+0.13 @53.7** (the 53.7 MHz domain is clean for
+the first time since build 15; the sub-CPU -> gate array paths were in it). Seed 3: -2.45 /
+-0.43. Seed 2 is on the card (md5 7658026f). Build 29 (old wrapper + PCM capture ring,
+md5 afaf57dc) served as the baseline: on the JP BIOS with no disc it played music (captured
+0.25 s, clean waveform) and went silent about a minute later with the main CPU in the VBlank
+wait loop at 0x8E4 and the sub-CPU polling registers. On build 30 the same no-disc JP BIOS
+shows the silent state from ~45 s on, so the silence may be the BIOS's normal behaviour
+rather than a hang; needs the owner's screen/ear confirmation. The capture ring delivers the
+full 32,552 samples/s (pointer wraps every 0.25 s).
+Board state: /media/fat/cifs/MegaCD/boot.rom is the JP BIOS for these tests (EU original in
+boot.rom.eu_backup) - RESTORE when done.
