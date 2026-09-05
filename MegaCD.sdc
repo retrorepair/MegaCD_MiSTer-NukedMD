@@ -13,3 +13,11 @@ set_multicycle_path -from [get_clocks { *|pll|pll_inst|altera_pll_i|*[0].*|divcl
 # and chases -2.5ns "violations" there that cannot happen.
 set_multicycle_path -from {emu|audio_cond|psg_iir|*} -to {emu|audio_cond|psg_iir|*} -setup 4
 set_multicycle_path -from {emu|audio_cond|psg_iir|*} -to {emu|audio_cond|psg_iir|*} -hold 3
+
+# The synchronous resets change once per boot (and are held for many cycles); the fitter
+# otherwise spends its effort on their fan-out (md_reset -> VD mux was the worst path in
+# build 24 at -3.95 ns) instead of on the paths that toggle in play.
+set_multicycle_path -from [get_registers {emu|md_reset}] -setup 3
+set_multicycle_path -from [get_registers {emu|md_reset}] -hold 2
+set_multicycle_path -from [get_registers {emu|sys_reset}] -setup 3
+set_multicycle_path -from [get_registers {emu|sys_reset}] -hold 2

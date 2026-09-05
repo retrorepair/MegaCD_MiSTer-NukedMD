@@ -325,3 +325,10 @@ still reads 0 ns since posted writes (build 21) - a single-event statistic, caus
 identified (no visible effect; build 20 read 37 ns). Open: add an "early DTACK" counter to the
 telemetry to see whether it is rare or systematic. Next accuracy item: IRQ sub-test 0A (INT2
 answered within ~6 main-CPU NOPs including exception entry); COLOR CALC 05.
+
+## Build 25 (2026-09-05 12:00) — timing: reset multicycle, cartridge mapper inputs registered
+Build 24 timing -3.95@107 / -1.61@53.7: worst paths md_reset -> VD mux / ram_68k / mcd_cart
+(static in play) and VDP io_address -> mcd_cart mapper registers (107 -> 53 MHz combinational).
+SDC: md_reset / sys_reset multicycle setup 3 / hold 2. mcd_cart.sv: the clk_sys mapper, EEPROM
+and protection blocks work from clk_sys-registered copies of the bus inputs and reset
+(cart_addr_s etc.); the 107 MHz data-response path is unchanged.

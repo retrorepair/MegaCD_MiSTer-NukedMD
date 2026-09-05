@@ -224,7 +224,26 @@ end
 
 //---------------------- MD cart mappers (clk_sys) ------------------------------------
 
+// The mapper, EEPROM and protection logic below runs at 53.69 MHz and only needs the bus state,
+// which is stable for at least one VCLK (130 ns) before any strobe: it works from copies
+// registered on clk_sys so the 107 MHz address/strobe registers do not feed 53 MHz logic
+// combinationally. The 107 MHz bus response logic further down keeps the direct inputs.
+reg [23:1] cart_addr_s;
+reg [15:0] cart_data_s;
+reg        cart_lwr_s, cart_uwr_s, cart_time_s, cart_cs_s, cart_oe_s, reset_s;
+always @(posedge clk_sys) begin
+	cart_addr_s <= cart_addr;
+	cart_data_s <= cart_data_wr;
+	cart_lwr_s  <= cart_lwr;
+	cart_uwr_s  <= cart_uwr;
+	cart_time_s <= cart_time;
+	cart_cs_s   <= cart_cs;
+	cart_oe_s   <= cart_oe;
+	reset_s     <= reset;
+end
+
 wire [23:0] md_addr = {cart_addr,1'b0};
+wire [23:0] md_addr_s = {cart_addr_s,1'b0};
 
 reg [5:0] md_bank[8];
 reg       md_bank_sram;
@@ -233,25 +252,25 @@ reg       ep_si, ep_sck, ep_hold, ep_cs;
 
 reg old_time_wr;
 always @(posedge clk_sys) begin
-	old_time_wr <= cart_lwr & cart_time;
+	old_time_wr <= cart_lwr_s & cart_time_s;
 
-	if(reset | mapper_reset) begin
+	if(reset_s | mapper_reset) begin
 		md_bank <= '{0,1,2,3,4,5,6,7};
 		md_bank_sram <= 0;
 		md_bank_use <= 0;
 		{ep_cs, ep_hold, ep_sck, ep_si} <= 4'b1111;
 	end
-	else if(cart_lwr & cart_time & ~old_time_wr) begin
+	else if(cart_lwr_s & cart_time_s & ~old_time_wr) begin
 		if(rom_mask[24:22]) begin
-			if(cart_addr[3:1]) begin
+			if(cart_addr_s[3:1]) begin
 				md_bank_use <= 1;
-				if(~pier_quirk) md_bank[cart_addr[3:1]] <= cart_data_wr[5:0]; //SSF2 banks
-				else if(cart_addr[3:1] == 4) {ep_cs, ep_hold , ep_sck, ep_si} <= cart_data_wr[3:0]; // Pier EEPROM
-				else if(~cart_addr[3]) md_bank[{1'b1,cart_addr[2:1]}] <= {2'b00, cart_data_wr[3:0]}; // Pier Banks
+				if(~pier_quirk) md_bank[cart_addr_s[3:1]] <= cart_data_s[5:0]; //SSF2 banks
+				else if(cart_addr_s[3:1] == 4) {ep_cs, ep_hold , ep_sck, ep_si} <= cart_data_s[3:0]; // Pier EEPROM
+				else if(~cart_addr_s[3]) md_bank[{1'b1,cart_addr_s[2:1]}] <= {2'b00, cart_data_s[3:0]}; // Pier Banks
 			end
-			else if(~pier_quirk) md_bank_sram <= cart_data_wr[0];
+			else if(~pier_quirk) md_bank_sram <= cart_data_s[0];
 		end
-		else if(~schan_quirk) md_bank_sram <= cart_data_wr[0];
+		else if(~schan_quirk) md_bank_sram <= cart_data_s[0];
 	end
 end
 
@@ -290,20 +309,20 @@ wire  [7:0] eeprom_ram_d;
 wire        eeprom_ram_we;
 reg         eeprom_bank;
 always @(posedge clk_sys) begin
-	if(reset || !eeprom_quirk) begin
+	if(reset_s || !eeprom_quirk) begin
 		eeprom_bank <= 0;
 		eeprom_sdai <= 1;
 		eeprom_scl  <= 1;
 	end
-	else if(cart_addr[23:21] == 3'b001 && cart_cs && (cart_lwr | cart_uwr)) begin
+	else if(cart_addr_s[23:21] == 3'b001 && cart_cs_s && (cart_lwr_s | cart_uwr_s)) begin
 		casex (eeprom_quirk)
-			4'b0001: if(cart_lwr) {eeprom_sdai,eeprom_scl} <= cart_data_wr[7:6];
-			4'b0010: if(cart_lwr) {eeprom_scl,eeprom_sdai} <= cart_data_wr[1:0];
-			4'b0011: if(cart_lwr) {eeprom_scl,eeprom_sdai} <= cart_data_wr[1:0];
-			4'b01xx: if(cart_addr[20:19] == 2'b10) {eeprom_scl,eeprom_sdai} <= cart_data_wr[1:0];
-			4'b1xxx:      if (~cart_addr[20] &  cart_lwr & ~cart_uwr) eeprom_sdai <= cart_data_wr[0];
-						else if (~cart_addr[20] & ~cart_lwr &  cart_uwr) eeprom_scl  <= cart_data_wr[8];
-						else if (~cart_addr[20] &  cart_lwr &  cart_uwr) eeprom_bank <= ~cart_data_wr[0];
+			4'b0001: if(cart_lwr_s) {eeprom_sdai,eeprom_scl} <= cart_data_s[7:6];
+			4'b0010: if(cart_lwr_s) {eeprom_scl,eeprom_sdai} <= cart_data_s[1:0];
+			4'b0011: if(cart_lwr_s) {eeprom_scl,eeprom_sdai} <= cart_data_s[1:0];
+			4'b01xx: if(cart_addr_s[20:19] == 2'b10) {eeprom_scl,eeprom_sdai} <= cart_data_s[1:0];
+			4'b1xxx:      if (~cart_addr_s[20] &  cart_lwr_s & ~cart_uwr_s) eeprom_sdai <= cart_data_s[0];
+						else if (~cart_addr_s[20] & ~cart_lwr_s &  cart_uwr_s) eeprom_scl  <= cart_data_s[8];
+						else if (~cart_addr_s[20] &  cart_lwr_s &  cart_uwr_s) eeprom_bank <= ~cart_data_s[0];
 		endcase
 	end
 end
@@ -368,21 +387,22 @@ assign eep_di   = eep_clearing ? 8'hFF : pier_quirk ? m95_di : eeprom_ram_d;
 assign eep_we   = eep_clearing ? 1'b1 : pier_quirk ? m95_rnw : eeprom_ram_we;
 
 wire pier_prot_cs = pier_quirk && (cart_addr == 'hAF3 || cart_addr == 'hAF4);
+wire pier_prot_cs_s = pier_quirk && (cart_addr_s == 'hAF3 || cart_addr_s == 'hAF4);
 reg [15:0] pier_prot_data;
 
 always @(posedge clk_sys) begin
 	reg [3:0] pier_count;
 	reg old_oe;
 
-	old_oe <= cart_oe;
+	old_oe <= cart_oe_s;
 
-	if(reset | mapper_reset) pier_count <= 0;
-	else if(pier_prot_cs & ~old_oe & cart_oe) begin
+	if(reset_s | mapper_reset) pier_count <= 0;
+	else if(pier_prot_cs_s & ~old_oe & cart_oe_s) begin
 		if (pier_count < 6) begin
 			pier_count <= pier_count + 1'h1;
-			pier_prot_data <= cart_addr[1] ? 16'h0000 : 16'h0010;
+			pier_prot_data <= cart_addr_s[1] ? 16'h0000 : 16'h0010;
 		end else begin
-			pier_prot_data <= cart_addr[1] ? 16'h0001 : 16'h8010;
+			pier_prot_data <= cart_addr_s[1] ? 16'h0001 : 16'h8010;
 		end
 	end
 end
@@ -395,16 +415,17 @@ wire rom_we = rom_mode && schan_quirk && (cart_lwr || cart_uwr) && !cart_addr[23
 
 reg rom_prot;
 always @(posedge clk_sys) begin
-	if(reset | mapper_reset) rom_prot <= 1;
-	else if(schan_quirk && cart_lwr && cart_time && cart_addr[7:1] == 7'b1111000) rom_prot <= cart_data_wr[0];
+	if(reset_s | mapper_reset) rom_prot <= 1;
+	else if(schan_quirk && cart_lwr_s && cart_time_s && cart_addr_s[7:1] == 7'b1111000) rom_prot <= cart_data_s[0];
 end
 
 //JCART multitap
 wire   jcart_cs = rom_mode && jcart_en && (cart_addr == 'h1C7FFF || cart_addr == 'h1FFFFF) && cart_addr >= rom_sz;
+wire   jcart_cs_s = rom_mode && jcart_en && (cart_addr_s == 'h1C7FFF || cart_addr_s == 'h1FFFFF) && cart_addr_s >= rom_sz;
 
 always @(posedge clk_sys) begin
-	if(reset) jcart_th <= 1;
-	else if(cart_lwr & jcart_cs) jcart_th <= cart_data_wr[0];
+	if(reset_s) jcart_th <= 1;
+	else if(cart_lwr_s & jcart_cs_s) jcart_th <= cart_data_s[0];
 end
 
 // Realtec
@@ -412,17 +433,17 @@ reg [21:17] realtec_bank;
 reg   [4:0] realtec_mask;
 reg         realtec_boot;
 always @(posedge clk_sys) begin
-	if (reset | mapper_reset | ~realtec_quirk) begin
+	if (reset_s | mapper_reset | ~realtec_quirk) begin
 		realtec_bank <= 0;
 		realtec_mask <= 0;
 		realtec_boot <= 1;
 	end
 	else begin
-		if (cart_addr[23:16] == 8'h40 && !cart_addr[11:1] && cart_uwr) begin
-			case(cart_addr[15:12])
-				4'h0: begin realtec_bank[21:20] <= cart_data_wr[2:1]; realtec_boot <= ~cart_data_wr[0]; end
+		if (cart_addr_s[23:16] == 8'h40 && !cart_addr_s[11:1] && cart_uwr_s) begin
+			case(cart_addr_s[15:12])
+				4'h0: begin realtec_bank[21:20] <= cart_data_s[2:1]; realtec_boot <= ~cart_data_s[0]; end
 				4'h2: begin
-					case (cart_data_wr[5:0])
+					case (cart_data_s[5:0])
 						6'd0,6'd1:                                      realtec_mask <= 5'b00000;
 						6'd2:                                           realtec_mask <= 5'b00001;
 						6'd3,6'd4:                                      realtec_mask <= 5'b00011;
@@ -431,7 +452,7 @@ always @(posedge clk_sys) begin
 						default:                                        realtec_mask <= 5'b11111;
 					endcase
 				end
-				4'h4: begin realtec_bank[19:17] <= cart_data_wr[2:0]; end
+				4'h4: begin realtec_bank[19:17] <= cart_data_s[2:0]; end
 			endcase
 		end
 	end
@@ -449,25 +470,25 @@ reg   [7:0] sf004_bank_reg;
 reg   [2:0] sf004_first_page;
 
 always @(posedge clk_sys) begin
-	if(reset | mapper_reset || !sf_quirk) begin
+	if(reset_s | mapper_reset || !sf_quirk) begin
 		sf001_bank_reg <= 8'h00;
 		sf002_bank_reg <= 8'h00;
 		sf004_sram_reg <= 0;
 		sf004_bank_reg <= 8'h80;
 		sf004_first_page <= '0;
 	end
-	else if(cart_lwr && !cart_addr[23:16]) begin
+	else if(cart_lwr_s && !cart_addr_s[23:16]) begin
 		case(sf_quirk[1:0])
 			//sf-001 new rev
-			1: if(sf_quirk[2] && !sf001_bank_reg[5] && cart_addr[11:8] == 4'he) sf001_bank_reg <= cart_data_wr[7:0];
+			1: if(sf_quirk[2] && !sf001_bank_reg[5] && cart_addr_s[11:8] == 4'he) sf001_bank_reg <= cart_data_s[7:0];
 			//sf-002
-			2: sf002_bank_reg <= cart_data_wr[7:0];
+			2: sf002_bank_reg <= cart_data_s[7:0];
 			//sf-004
 			3: if (sf004_bank_reg[7]) begin
-					case (cart_addr[11:8])
-						4'hd: sf004_sram_reg <= cart_data_wr[7];
-						4'he: sf004_bank_reg <= cart_data_wr[7:0];
-						4'hf: sf004_first_page <= cart_data_wr[6:4];
+					case (cart_addr_s[11:8])
+						4'hd: sf004_sram_reg <= cart_data_s[7];
+						4'he: sf004_bank_reg <= cart_data_s[7:0];
+						4'hf: sf004_first_page <= cart_data_s[6:4];
 					endcase
 				end
 		endcase
@@ -499,21 +520,21 @@ reg  [15:0] chk_data;
 always @(posedge clk_sys) begin
 	chk_cs <= 0;
 	case(chk_quirk)
-		1: if(md_addr == 'h400000) begin
+		1: if(md_addr_s == 'h400000) begin
 				chk_data <= 'h9000;
 				chk_cs <= 1;
 			end
-			else if(md_addr == 'h401000) begin
+			else if(md_addr_s == 'h401000) begin
 				chk_data <= 'hd300;
 				chk_cs <= 1;
 			end
 
-		2: if(md_addr == 'hA13000) begin
+		2: if(md_addr_s == 'hA13000) begin
 				chk_data <= 'h0a;
 				chk_cs <= 1;
 			end
 
-		3: if(md_addr == 'hA13000) begin
+		3: if(md_addr_s == 'hA13000) begin
 				chk_data <= 'h1c;
 				chk_cs <= 1;
 			end
