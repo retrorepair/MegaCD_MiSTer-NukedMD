@@ -49,16 +49,21 @@ def show(w):
              (live >> 7) & 1, (live >> 6) & 1, (live >> 5) & 1, (live >> 4) & 1, (live >> 3) & 1, (live >> 2) & 1, (live >> 1) & 1, live & 1, ce_hi))
     print('  int2: IFL2 write end -> sub write FF8026 last=%.2fus max=%.2fus | -> main read A12026 last=%.2fus min=%.2fus'
           % (irq_last * TICK_NS / 1000, irq_max * TICK_NS / 1000, win_last * TICK_NS / 1000, (0 if win_min == 0xFFFF else win_min) * TICK_NS / 1000))
-    for i in range(8):
-        a = w[24 + 2*i]; b = w[25 + 2*i]
-        if a == 0 and b == 0: continue
-        va = (a >> 41) & 0x7FFFFF; rw = (a >> 40) & 1; rom = (a >> 39) & 1; ras2 = (a >> 38) & 1; fdc = (a >> 37) & 1; cs = (a >> 36) & 1; dt = (a >> 35) & 1
-        lat_dt = (a >> 23) & 0xFFF; vd = (a >> 7) & 0xFFFF; seen_busy = a & 1; dma = (a >> 1) & 1; asel = (a >> 2) & 1
-        mcd_do = (b >> 48) & 0xFFFF; sdr = (b >> 32) & 0xFFFF; lat_busy = (b >> 20) & 0xFFF; cyc_len = (b >> 8) & 0xFFF
-        reg = 'ROM ' if rom else 'RAS2' if ras2 else 'FDC ' if fdc else 'CE0 ' if cs else '--- '
-        print('  #%2d %s %06X %s bus=%04X ga=%04X sdram=%04X  dtack@%3d busy_end@%3d len=%3d (x9.3ns) %s%s'
-              % (i, 'RD' if rw else 'WR', va << 1, reg, vd, mcd_do, sdr, lat_dt if dt else -1, lat_busy if seen_busy else -1, cyc_len,
-                 'mcd_dtack' if dt else 'NO-DTACK', ('' if seen_busy else ' no-sdram') + (' DMA' if dma else '') + (' asel' if asel else '')))
+    # sub-CPU bus address ring: 32 entries in words 24-39 (two per word), oldest first from the write pointer
+    rp = (w[20] >> 13) & 0x1F
+    ents = []
+    for wi in range(24, 40):
+        ents.append(w[wi] & 0xFFFFFFFF); ents.append(w[wi] >> 32)
+    ents = ents[rp:] + ents[:rp]
+    def region(a):
+        if a < 0x80000: return 'P'
+        if a < 0xE0000: return 'W'
+        if 0xFE0000 <= a < 0xFF0000: return 'B'
+        if 0xFF0000 <= a < 0xFF8000: return 'M'
+        if a >= 0xFF8000: return 'R'
+        return '?'
+    print('  sub-CPU last 32 bus cycles, oldest first (r/W = read/write, P=PRG-RAM W=word RAM B=backup M=PCM R=register):')
+    print('   ' + ' '.join('%s%s%06X' % ('r' if (e >> 23) & 1 else 'W', region((e & 0x7FFFFF) << 1), (e & 0x7FFFFF) << 1) for e in ents))
 
 if __name__ == '__main__':
     interval = float(sys.argv[1]) if len(sys.argv) > 1 else 1.0
