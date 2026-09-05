@@ -131,6 +131,7 @@ Slack history:
 | 32 | 37,846 (90%) | 519 | -1.85 | -0.41 | FF804C font colour byte write (COLOR CALC 05), Keep Running arms 3 s after the first BIOS load; PLACEMENT_EFFORT_MULTIPLIER 4 + ROUTER_TIMING_OPTIMIZATION_LEVEL MAXIMUM gave a bit-identical fit (no effect) |
 | 33 | 37,698 (90%) | 519 | -1.84 | -0.09 | build 32 + hang telemetry (CDD command/status counters, last sub-CPU register address); deployed (md5 fc280716) |
 | 33 RC | 36,196 (86%) | 519 | -1.77 | +0.25 | same sources without MCD_TELEMETRY (release shape, md5 01c33bb9): the remaining 107 MHz paths are structural (VDP address decode -> VD bus register), not congestion |
+| 34 | 37,643 (90%) | 519 | -2.22 | -0.14 | sub-CPU address ring (32 bus cycles) replaces the DMA trace; diagnostic build that located the hang |
 
 The spread between seeds of one netlist is up to 4.3 ns at 107 MHz (build 27 vs 28), so every
 candidate is fitted with two or three seeds and the best one is deployed.
