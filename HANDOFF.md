@@ -628,3 +628,19 @@ all 11 outputs and 8 storage registers compared twice per MCLK edge; seeds 1 and
 610,032 compare points, 0 mismatches; two mutants caught (cycle 1 and cycle 1498). Not yet wired
 into the build (fc1004.v still instantiates `tmss`); switching is a one-line change behind a
 define once the arbiter and I/O are converted too, per the plan.
+
+## Build 35 verificator (2026-09-05 23:40) and CDC INIT root cause
+NTSC (US forced): COLOR CALC OK (first time), VAR OK, REG 8030 OK, IRQ 0A, CDC REGS 01.
+PAL (cart region): COLOR CALC OK, VAR 23608 (02), IRQ 227 (09), REG 8030 1275 (07), CDC
+REGS 01. IRQ 09 and VAR are the 60 Hz windows (hardware-true at 50 Hz); REG 8030 in PAL is
+OUR inaccuracy: PRG-RAM in SDRAM whose clock follows the console, so in PAL more accesses take
+a wait state; real PRG-RAM has none in either region -> next: acknowledge/read on address valid.
+Disc mounted 6 s after the cartridge under Keep Running: mount works (12 statuses), but the
+verificator issued 0 CDD commands: its cddInit sets HOCK then only polls the status until it
+leaves 0xF; the core hands commands to Main only on an FF804A write and Main answers one status
+per command, so the last status (0xF, mount latency) never refreshed. Upstream has the same
+limitation (issue 50 "hangs on cdc init"). Hardware: the gate array retransmits its command
+registers every 75 Hz frame while HOCK is set. Implemented (build 36): CDD_SEND on HOCK rising
+and once per 166,667 ticks of the 12.5 MHz enable unless software wrote a command.
+"CD hardware detected at 0x00400000" = cartridge mode (Mode 1); upstream's screenshot shows
+0x00000000 because it ran the verificator as the CD boot ROM.

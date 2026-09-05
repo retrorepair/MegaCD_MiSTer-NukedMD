@@ -275,6 +275,7 @@ architecture rtl of ASIC is
 	signal OLD_IEN5 					: std_logic;
 	signal CDD_REC_OLD 				: std_logic;
 	signal HOCK_OLD 					: std_logic;
+	signal CDD_FRAME_CNT				: unsigned(17 downto 0);	-- 12.5 MHz ticks since the last command hand-off (75 Hz frame = 166667)
 	signal CD_SC_WR_OLD 				: std_logic;
 	signal CDD_STAT_RECEIVED 		: std_logic;
 	signal SC_CNT 						: unsigned(5 downto 0);

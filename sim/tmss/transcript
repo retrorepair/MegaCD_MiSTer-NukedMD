@@ -1,0 +1,38 @@
+# vsim -c -t 1ps -suppress 3009,3722,8386,8822,3017 "+SEED=1" "+NRAND=100000" work.tb_tmss -do "run -all; quit -f" 
+# Start time: 23:34:34 on Sep 05,2026
+# Loading sv_std.std
+# Loading work.tb_tmss
+# Loading work.tmss
+# Loading work.ym_sdffr
+# Loading work.ym_sdffs
+# Loading work.ym_slatch
+# Loading work.tmss_rtl
+# run -all
+# tb_tmss: seed=1 random cycles=100000
+# INFO cycle 0 t=0 CE0_o(die) -> 1 (CE0_i=1)
+# INFO cycle 21 t=190896 RESET(die) -> 1
+# INFO cycle 170: RESET (active low) not asserted after SRES
+# INFO cycle 362: CE0_o high (cart disabled) before cart enable
+# INFO cycle 413 t=3841200 RESET(die) -> 0
+# INFO cycle 426: RESET asserted by a VDP access without SEGA (TMSS lock)
+# INFO cycle 554: SEGA latched in sl1/sl2
+# INFO cycle 682: RESET still asserted (locked) until the VDP access after SEGA
+# INFO cycle 733 t=6821040 RESET(die) -> 1
+# INFO cycle 746: RESET released after SEGA + VDP access
+# INFO cycle 810: CE0_o still high before cart enable
+# INFO cycle 874 t=8138688 CE0_o(die) -> 0 (CE0_i=0)
+# INFO cycle 938: CE0_o follows CE0_i after cart enable
+# INFO cycle 938 t=8734656 CE0_o(die) -> 1 (CE0_i=1)
+# INFO cycle 1006: CE0_o high again after cart disable
+# INFO cycle 1070 t=9963840 CE0_o(die) -> 0 (CE0_i=0)
+# INFO cycle 1074: CE0_o follows CE0_i after word-write enable
+# INFO cycle 1074 t=10001088 CE0_o(die) -> 1 (CE0_i=1)
+# INFO cycle 1509 t=14047152 RESET(die) -> 0
+# INFO cycle 1554 t=14466192 RESET(die) -> 1
+# INFO cycle 2730: RESET released again after second SEGA + VDP read
+# INFO directed phase done at cycle 2794, warnings=0
+# PASS: 105014 MCLK cycles, 210028 compare points, 0 mismatches, 0 directed warnings
+# ** Note: $finish    : tb_tmss.sv(331)
+#    Time: 977890368 ps  Iteration: 1  Instance: /tb_tmss
+# End time: 23:34:35 on Sep 05,2026, Elapsed time: 0:00:01
+# Errors: 0, Warnings: 0
