@@ -403,3 +403,22 @@ checked against CDC.vhd and ASIC.vhd:
 Run order once the board is back: MegaCD_verificator.mgl with a disc mounted through the
 OSD (Keep Running), read CDC INIT / FLAGS / DMA1-3 / WORD RAM results, then fix in the order
 the tests fail (each test stops at its first error).
+
+## 2026-09-05 17:20 — the "build 26 zero PCM counters" were build 22 running
+A marker test (writing markers into DDR3 words 18-23 from Linux) showed the core rewrites them
+every burst, so the counters really were zero. Cause: two files in /media/fat/_Console shared
+the prefix `MegaCD_TEST_NukedMD_20260904` (`.rbf` = the deployed build, `_22.rbf` = build 22
+copied on 2026-09-04 20:15). Main resolves an MGL `<rbf>` by prefix and takes the last match
+in sort order, so every MGL load since then ran build 22 (posted writes, BIOS corruption).
+The `_22` file is renamed to `MegaCD_TEST_b22_20260904.rbf`. The BIOS hangs reported on
+"builds 24-26" via MGL, and the earlier PRG-RAM "min 0 ns", need re-checking on the real
+builds; the owner's OSD-menu loads may have hit the `_22` file as well.
+Real build 26, Final Fight CD (USA), NTSC, 3.0 s window: sample_ce 520,741 Hz (expected
+520,832), ce_f 12.498 MHz, PCM writes 180 all seen by the chip, late_fetch 0. The PCM clocking
+is right; the warble scene still has to be measured (Final Fight's title uses little PCM).
+
+## Build 27 (2026-09-05 17:12) — fits, but the placement is poor: -6.15 ns @107, -4.29 @53.7
+37,540 ALMs. Worst paths: md_board RW -> ram_68k write enable, VDP w129 -> md_board VD[5],
+RW / VDP DMA control -> mcd_sel_n/mcd_uds_n (same families as builds 24-26, 3 ns worse).
+Not deployed. Seeds 2 and 3 of the same sources plus the INT2 telemetry (build 28 content)
+are compiling in the scratchpad seed2/ seed3/ copies.
