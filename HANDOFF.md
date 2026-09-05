@@ -532,3 +532,18 @@ a wrapper regression. With Keep Running OFF the JP BIOS boots to its menu with m
 31: 3 s captured (12 windows), no single-sample spike above 3000 in the chip output, 28 above
 2000 clustered in a 4 ms burst (likely programme material). Fix committed: the masking arms
 3 s after the first BIOS load (build 32). The CFG bit is now OFF on the card.
+
+## 2026-09-05 21:05 — the BIOS hang: what is known
+Signature (build 31, JP BIOS menu, ~10 min in; and within seconds after OSD Reset & Eject):
+screen normal, main CPU cycling its VBlank frame loop (0x8E4) with the handler running, sub-CPU
+spinning on one gate array register at ~89k reads/s, PCM output silent, VDP 59.9 Hz, Main's
+process alive and consuming CPU. Reset & Eject recovers it. This did NOT happen on the original
+core: the regression is in this port (sub-CPU model/clock/bus changes), not in Main.
+Protocol facts (Eke, SpritesMind t=3020): the gate array asserts HOCK to receive the 75 Hz
+status, INT4 fires after the 8th status nibble, the command is transferred after the status,
+and the drive stops sending statuses if the gate array stops sending commands - so Main's
+one-status-per-command exchange is faithful. The ASIC diff against the original tree (55
+lines) touches CLK_CNT/EN50, the timer divider, PRG-RAM DTACK, PCM_RDY and FF804C only; the
+CDD/INT4/IACK logic is the original's. hps_ext.v counts request toggles (Main cannot miss one).
+Next: build 33 telemetry (last sub register address, CDD command/status counters) read in the
+hung state right after a Reset & Eject.
