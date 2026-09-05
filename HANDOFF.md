@@ -370,3 +370,10 @@ the other ports issue one 7-clock access at a time, so starvation looks unlikely
 array's CDC->PCM DMA writes one byte per ~6 sub-CPU clocks without checking PCM_RDY (a write
 into a full 8-entry FIFO is dropped, needs >4 us of SDRAM starvation). The late_fetch counter
 (build 26/27) decides whether the SDRAM path is the NTSC PCM warble.
+
+## Thunder Storm FX (2026-09-05 16:45) — Main-side patch written, untested
+tools/main_patches/megacdd_seek_latency.patch: cdd_t::SeekToLBA adopts the Genesis Plus GX
+drive latency rule for the MegaCD core (Play and Seek at least 12 CDD interrupts unless a
+latency is still running, plus the distance term; Main had Play 11 / Seek 0). Needs a Main
+build (no ARM toolchain here); test with MegaCD_tsfx_jp.mgl, then Final Fight CD intro,
+Sonic CD track 26, Radical Rex.
