@@ -317,3 +317,11 @@ the HPS are single-clock pulses and were dropped ~7% of the time (CDDA/PCM sampl
 words). Fix: ENABLE back to 1 (as upstream) and a new EN50 port that only steps the gate
 array's CLK_CNT (sub-CPU 12.5 MHz clock, CE_F/CE_R for timer, CDC and PCM register timing).
 Build 23 (idle-port guard only) was aborted; build 24 carries the guard and this fix.
+
+## Build 24 (2026-09-05 11:25) — on the MiSTer; NTSC audio fix candidate
+BIOS renders correctly; verificator = build 20 (VAR OK, REG 8030 OK, IRQ err0A, CDC REGS 01).
+37,580 ALMs (90%). Telemetry: PRG-RAM AS->DTACK avg 50 ns, max 224 ns; the per-region minimum
+still reads 0 ns since posted writes (build 21) - a single-event statistic, cause not yet
+identified (no visible effect; build 20 read 37 ns). Open: add an "early DTACK" counter to the
+telemetry to see whether it is rare or systematic. Next accuracy item: IRQ sub-test 0A (INT2
+answered within ~6 main-CPU NOPs including exception entry); COLOR CALC 05.

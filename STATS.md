@@ -120,6 +120,8 @@ Slack history:
 | 17 | 37,309 (89%) | 519 | | | Mega CD at 12.5 MHz (50 MHz enable), timer divider 384, CDC 75 Hz decoder frame |
 | 18 | 37,082 (88%) | 519 | -2.37 | -0.91 | direct sub-CPU bus outputs (DTACK window parity with FX68K) |
 | 20 | 37,136 (89%) | 519 | | | PRG-RAM read DTACK at SDRAM acceptance: VAR test passes |
+| 22 | 37,453 (89%) | 519 | -2.52 | -0.27 | posted PRG-RAM writes + DTACK release fix (read-after-write hazard remained) |
+| 24 | 37,580 (90%) | 519 | | | ENABLE back to 1 (CDDA/PCM/CD strobes no longer dropped), 50 MHz enable only on the sub-CPU clock counter, idle-port guard |
 
 ## Bring-up numbers from the hardware telemetry
 
