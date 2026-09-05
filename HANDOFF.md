@@ -377,3 +377,29 @@ drive latency rule for the MegaCD core (Play and Seek at least 12 CDD interrupts
 latency is still running, plus the distance term; Main had Play 11 / Seek 0). Needs a Main
 build (no ARM toolchain here); test with MegaCD_tsfx_jp.mgl, then Final Fight CD intro,
 Sonic CD track 26, Radical Rex.
+
+## CD system audit against jgenesis issue 105 (2026-09-05 16:55) — to verify with a disc on build 27
+jsgroth's list of behaviours needed to pass the verificator's CDC / DMA / word RAM tests,
+checked against CDC.vhd and ASIC.vhd:
+- Already matching: sub-CPU access to 2M word RAM owned by the main CPU is not acknowledged
+  until RET0=0 (word RAM 20: the sub-CPU stalls in the bus cycle); DMA to word RAM waits the
+  same way (DMA3 44); DMA to PRG-RAM waits while SBRQ/SRES (DMA3 48); odd DMA length drops
+  the last byte for PRG/word RAM and not for PCM RAM (DMA2 04/12); the other CPU's host-data
+  read returns HD without advancing the DMA (DMA3 28); FF800A readable (FLAGS 46); DECI flag
+  independent of DECIEN (FLAGS 44); INT5 is edge-detected from the CDC's level /INT, so a
+  second event while the first is unacknowledged does not re-trigger (FLAGS 26/34/36); the
+  75 Hz decoder frame and the 40% release are in since build 17 (FLAGS 30/40).
+- Candidates (fail on hardware if jsgroth is right, all cheap to fix):
+  1. CDC register reads of R0 (COMIN) and undefined registers keep the previous DO; hardware
+     returns FF (FLAGS 32). CDC.vhd read mux: DO <= x"FF" for x"0" and others.
+  2. DTEI (and the gate array's EDT) are raised after the host reads the last word (TS_SEND,
+     DBC=0); hardware raises them when the last word is moved into the host data register,
+     i.e. with one word left to read (FLAGS 22, DMA3 04). Move the DBC=0 end handling to the
+     point where the last word is loaded (TS_FIFO), keep DTEN/DTBSY semantics.
+  3. A write to the host data register (FF8008 / A12008) should advance the DMA like a read
+     (DMA3 60); the ASIC treats FF8008 writes as null.
+  4. Changing DD mid-transfer resets the DMA address only; the ASIC also forces DS to IDLE
+     through DMA_ADDR_SET (DMA3 50) and would drop a byte in flight.
+Run order once the board is back: MegaCD_verificator.mgl with a disc mounted through the
+OSD (Keep Running), read CDC INIT / FLAGS / DMA1-3 / WORD RAM results, then fix in the order
+the tests fail (each test stops at its first error).
