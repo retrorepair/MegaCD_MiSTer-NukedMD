@@ -570,3 +570,16 @@ nuked-md file already modified for the expansion connector; the expansion data t
 sixth source to the 16-bit VD OR-mux and could be folded into the cartridge term from
 MegaCD.sv) - needs the owner's OK since it is nuked-md; (b) accept, as the MegaDrive core
 does (the same VDP paths fail there by ~2 ns at the slow corner).
+
+## 2026-09-05 22:30 — hang on build 33, second look
+Screen: JP BIOS menu with the MEGA CD logo half drawn. Main CPU: only A1200E reads, data
+0107 (main flag 01, sub flag 07): waiting for the sub-CPU to finish logo step 7. Sub-CPU:
+PRG-RAM 2.8M/s (running code), word RAM 0/s, registers ~1.1k/s, PCM writes 63/s, CDD
+exchange alive at 75/s. Last-register histogram: FFFFF6 (563), FF0010 (524), FF8000 (375),
+FF8036 (20), FF8034 (9), FFFFF8 (9). FFFFF6/FFFFF8 are interrupt-acknowledge cycles (FC=111,
+A3..1 = level 3 / level 4): the timer interrupt (INT3, music engine polling PCM channel
+addresses at FF0010) keeps firing, INT4 (CDD) at 75 Hz, so the sub-CPU is not crashed; its
+main program spins without touching word RAM. The timer/INT3 logic is the original core's.
+Build 34 (compiling) records the sub-CPU's last 32 bus addresses to locate that loop.
+The state arrived on its own about two minutes after boot on build 33 (no Reset & Eject in
+the counters).
