@@ -127,6 +127,7 @@ Slack history:
 | 28 | 37,543 (90%) | 519 | -1.84 | -0.32 | seed 2 of the same sources (seed 3: -2.65 / -0.77) |
 | 29 | 37,556 (90%) | 519 | -2.24 | -0.87 | PCM output capture ring, old sub-CPU wrapper (baseline) |
 | 30 | 37,653 (90%) | 519 | -1.91 | +0.13 | sub-CPU outputs registered at MCLK (53.7 MHz domain clean), seed 2 (seed 3: -2.45 / -0.43) |
+| 31 | 37,843 (90%) | 519 | -2.03 | +0.23 | work RAM write register stage; TNS  -360 ns (was -703); region-independent Mega CD clock; seed 2 (seed 3: -2.19 / -0.68) |
 
 The spread between seeds of one netlist is up to 4.3 ns at 107 MHz (build 27 vs 28), so every
 candidate is fitted with two or three seeds and the best one is deployed.
@@ -150,14 +151,14 @@ REG 8030 windows were calibrated on a 60 Hz console; a 50 Hz console (real Europ
 GPGX issue 408) fails them by the 0.9% clock ratio, and so does this core in PAL since the
 Mega CD clock became region independent (build 30).
 
-| Test | Expected | Upstream MegaCD | Build 12 (FX68K sub) | Build 17 | Build 18 | Build 20 | Build 30 NTSC | Build 30 PAL |
-|---|---|---|---|---|---|---|---|---|
-| COLOR CALC | OK | ERR 05 | ERR 05 | ERR 05 | ERR 05 | ERR 05 | ERR 05 (fix in build 32) | ERR 05 |
-| VAR TESTS (sub-CPU memory loop) | 23753-23980 | 22744 | 22381 | 27906 | 26742 | OK | OK | 23609 (ERR 02) |
-| IRQ TEST (128 back-to-back INT2) | 128 handled, 224-226 | 223 (ERR 09) | OK | 106 (ERR 06) | 122 (ERR 06) | ERR 0A (128/128 and 224-226 pass) | ERR 0A | 228 (ERR 09) |
-| REG 8030 (timer vs sub-CPU) | 1286-1288 | 1299 (ERR 07) | OK | OK | OK | OK | OK | 1275 (ERR 07) |
-| REG X000/X002/2006/X00C, PROG/WORD RAM, WRAM PMOD | OK | OK | OK | OK | OK | OK | OK | OK |
-| CDC REGS | OK on CDX-class CDC only | ERR 01 | ERR 01 | ERR 01 | ERR 01 | ERR 01 | ERR 01 | ERR 01 |
+| Test | Expected | Upstream MegaCD | Build 12 (FX68K sub) | Build 17 | Build 18 | Build 20 | Build 30 NTSC | Build 30 PAL | Build 31 NTSC |
+|---|---|---|---|---|---|---|---|---|---|
+| COLOR CALC | OK | ERR 05 | ERR 05 | ERR 05 | ERR 05 | ERR 05 | ERR 05 (fix in build 32) | ERR 05 | ERR 05 |
+| VAR TESTS (sub-CPU memory loop) | 23753-23980 | 22744 | 22381 | 27906 | 26742 | OK | OK | 23609 (ERR 02) | OK |
+| IRQ TEST (128 back-to-back INT2) | 128 handled, 224-226 | 223 (ERR 09) | OK | 106 (ERR 06) | 122 (ERR 06) | ERR 0A (128/128 and 224-226 pass) | ERR 0A | 228 (ERR 09) | ERR 0A |
+| REG 8030 (timer vs sub-CPU) | 1286-1288 | 1299 (ERR 07) | OK | OK | OK | OK | OK | 1275 (ERR 07) | OK |
+| REG X000/X002/2006/X00C, PROG/WORD RAM, WRAM PMOD | OK | OK | OK | OK | OK | OK | OK | OK | OK |
+| CDC REGS | OK on CDX-class CDC only | ERR 01 | ERR 01 | ERR 01 | ERR 01 | ERR 01 | ERR 01 | ERR 01 | ERR 01 |
 
 Builds 12 and earlier ran the Mega CD block at 13.42 MHz (see HANDOFF); from build 17 it runs
 at 12.5 MHz, which is why the VAR count rose before the sub-CPU bus path was corrected.
