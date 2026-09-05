@@ -461,3 +461,20 @@ rather than a hang; needs the owner's screen/ear confirmation. The capture ring 
 full 32,552 samples/s (pointer wraps every 0.25 s).
 Board state: /media/fat/cifs/MegaCD/boot.rom is the JP BIOS for these tests (EU original in
 boot.rom.eu_backup) - RESTORE when done.
+
+## Build 30 verificator (2026-09-05 19:25) — registered outputs are clean; PAL ratio question open
+NTSC (region forced US in MegaCD.CFG byte 0 = 0x88): VAR OK, REG 8030 OK, IRQ err 0A, CDC
+REGS 01, COLOR CALC 05 = identical to builds 20-28. So the MCLK-registered sub-CPU outputs
+cost nothing measurable, and the PRG-RAM "min 0 ns" anomaly is gone (min 27.9 ns).
+PAL (cart header region): VAR 23609 (23753-23980), IRQ 228 (224-226), REG 8030 1275
+(1286-1288): all 0.9% off with the exact 12.5 MHz sub clock in PAL. The verificator's windows
+are NTSC-ratio windows; what real 50 Hz hardware does decides the model:
+- variant A (scratchpad seed2/, SEED 2): mcd_cegen IN_CLK fixed 53693175 and CDC frame fixed,
+  i.e. the sub-CPU scales with the console clock (12.386 MHz in PAL) as in builds 17-29;
+- variant B (scratchpad seed3/, SEED 2): IN_CLK by region (12.5 MHz in PAL) and the CDC frame
+  by PALSW, i.e. a region-independent Mega CD crystal.
+Both include the work RAM write register stage (build 31). The owner's real model 2 run of
+the verificator (only CDC REGS 01 / CDC FLAGS 40 failed) settles it if the console was at
+50 Hz: then A is hardware-true; if it was at 60 Hz, B is.
+Board state: MegaCD.CFG byte0 0x88 (region forced US) and byte4 0x10 (Keep Running) set;
+/media/fat/cifs/MegaCD/boot.rom is still the JP BIOS (EU original in boot.rom.eu_backup).
