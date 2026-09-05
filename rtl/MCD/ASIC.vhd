@@ -828,6 +828,7 @@ begin
 			INT_PEND(6) <= '0';
 			
 			CDD_STAT_RECEIVED <= '0';
+			CDD_FRAME_CNT <= (others => '0');
 		elsif rising_edge(CLK) then
 			if EN = '1' then
 				SUB_RST_EXEC <= '0';
@@ -864,8 +865,28 @@ begin
 					CDD_STAT_RECEIVED <= '0';
 					INT_PEND(4) <= '1';
 				end if;
-				
+
+				-- While HOCK is set the real gate array clocks its command registers out to the drive every
+				-- 75 Hz frame and the drive answers each transfer with a status, whether or not software wrote
+				-- a new command. This core hands a command to the HPS only on a write to FF804A (below) and the
+				-- HPS answers one status per command, so software that sets HOCK and then only polls the status
+				-- (mcd-verificator cddInit) never saw it change: upstream's "hangs on CDC INIT". So the current
+				-- command registers are handed over again when HOCK rises and then once per frame (166,667
+				-- ticks of the 12.5 MHz enable) unless software wrote a command in between.
 				CDD_SEND <= '0';
+				if HOCK = '0' then
+					CDD_FRAME_CNT <= (others => '0');
+				elsif HOCK_OLD = '0' then
+					CDD_SEND <= '1';
+					CDD_FRAME_CNT <= (others => '0');
+				elsif CLK_12M_F = '1' then
+					if CDD_FRAME_CNT = 166666 then
+						CDD_SEND <= '1';
+						CDD_FRAME_CNT <= (others => '0');
+					else
+						CDD_FRAME_CNT <= CDD_FRAME_CNT + 1;
+					end if;
+				end if;
 				
 				if SUB_CPU_CDC_READ = '1' and DS = DS_IDLE then
 					SUB_CPU_CDC_READ <= '0';
@@ -1018,6 +1039,7 @@ begin
 								if S68K_LDS_N = '0' then
 									CDDC(39 downto 36) <= S68K_DI(3 downto 0);
 									CDD_SEND <= HOCK;
+									CDD_FRAME_CNT <= (others => '0');
 								end if;
 								if S68K_UDS_N = '0' then
 									CDDC(35 downto 32) <= S68K_DI(11 downto 8);
