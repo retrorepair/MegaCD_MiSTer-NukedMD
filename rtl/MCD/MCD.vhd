@@ -395,6 +395,7 @@ begin
 		CLK   		=> CLK,
 		RESET_N     => ERES_N,
 		ENABLE      => ENABLE,
+		PALSW       => PALSW,
 		
 		CLKEN_P   	=> S68K_CE_R,
 		CLKEN_N		=> S68K_CE_F,

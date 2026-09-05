@@ -799,7 +799,7 @@ CEGen mcd_cegen
 (
 	.CLK(clk_sys),
 	.RST_N(~sys_reset),
-	.IN_CLK(53693175),
+	.IN_CLK(PAL ? 53203423 : 53693175), // the Mega CD 50 MHz crystal is region independent: derive it from the actual clock
 	.OUT_CLK(50000000),
 	.CE(mcd_en)
 );

@@ -8,6 +8,7 @@ entity CDC is
 		CLK			: in std_logic;
 		RESET_N		: in std_logic;
 		ENABLE		: in std_logic;
+		PALSW			: in std_logic;					-- 53.20 MHz (PAL) instead of 53.69 MHz on CLK
 		CLKEN_P 		: in std_logic;
 		CLKEN_N 		: in std_logic;
 		
@@ -160,6 +161,8 @@ architecture rtl of CDC is
 	signal FRAME_CNT : unsigned(19 downto 0);	-- 75 Hz decoder frame timer (53.69 MHz clocks)
 	signal DEC_FRAME : std_logic;				-- frame boundary pulse
 	signal DEC_MID : std_logic;					-- ~40% into the frame: DECI returns to 1
+	signal FRAME_END : unsigned(19 downto 0);	-- clocks per 75 Hz frame - 1, by region
+	signal FRAME_MID : unsigned(19 downto 0);	-- 40% of the frame
 	signal SECTOR_END : std_logic;				-- a full sector arrived from the drive
 	
 --	signal DECI_WAIT_CNT : unsigned(15 downto 0);
@@ -420,6 +423,10 @@ begin
 	DEC_ADDR <= std_logic_vector( unsigned(PT) + 2352 + DEC_POS );
 	RAM_A_WR <= DEC_ADDR(15 downto 1);
 	RAM_DO <= DEC_DAT;
+	-- The CLK frequency follows the console region (53.69 MHz NTSC, 53.20 MHz PAL); the CD side is region
+	-- independent, so the frame length is chosen by PALSW to keep 75 Hz in both.
+	FRAME_END <= to_unsigned(709378, 20) when PALSW = '1' else to_unsigned(715908, 20);
+	FRAME_MID <= to_unsigned(283751, 20) when PALSW = '1' else to_unsigned(286363, 20);
 	-- 75 Hz decoder frame timer: 53693175 / 75 = 715909 clocks per frame; the sector stream from the
 	-- drive (one sector per frame) resynchronises it, so real data and the free-running frame coincide.
 	process( RESET_N, CLK )
@@ -433,12 +440,12 @@ begin
 			DEC_MID <= '0';
 			if CTRL0(DECEN) = '0' or SECTOR_END = '1' then
 				FRAME_CNT <= (others => '0');
-			elsif FRAME_CNT = 715908 then
+			elsif FRAME_CNT = FRAME_END then
 				FRAME_CNT <= (others => '0');
 				DEC_FRAME <= '1';
 			else
 				FRAME_CNT <= FRAME_CNT + 1;
-				if FRAME_CNT = 286363 then
+				if FRAME_CNT = FRAME_MID then
 					DEC_MID <= '1';
 				end if;
 			end if;

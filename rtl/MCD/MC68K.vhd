@@ -94,6 +94,14 @@ architecture rtl of M68K_WRAP is
 	signal n_uds		: std_logic;
 	signal n_strobe_z	: std_logic;
 	signal n_bg			: std_logic;
+	-- outputs registered at MCLK (see below)
+	signal r_address	: std_logic_vector(22 downto 0) := (others => '0');
+	signal r_data_o		: std_logic_vector(15 downto 0) := (others => '0');
+	signal r_as_n		: std_logic := '1';
+	signal r_uds_n		: std_logic := '1';
+	signal r_lds_n		: std_logic := '1';
+	signal r_rnw		: std_logic := '1';
+	signal r_fc			: std_logic_vector(2 downto 0) := (others => '1');
 
 begin
 
@@ -145,13 +153,32 @@ begin
 	-- more wait state than FX68K on every late-acknowledged access (mcd-verificator IRQ and
 	-- VAR tests). There is no buffer between the sub-CPU and the gate array on the real board.
 	-- Released (high-Z) pins read as pulled up, as md_board does for the main CPU.
-	A     <= n_address;
-	DO    <= n_data_o;
-	AS_N  <= n_strobe_z or n_as;
-	UDS_N <= n_strobe_z or n_uds;
-	LDS_N <= n_strobe_z or n_lds;
-	RNW   <= n_rw_z or n_rw;
-	FC    <= n_fc or (n_fc_z & n_fc_z & n_fc_z);
+	-- The gate-level model's bus outputs are combinational functions of latches that settle after
+	-- every MCLK (107 MHz) edge, while the gate array samples them in the 53.7 MHz domain. Handing
+	-- them over combinationally (builds 18-28) left long 107 -> 53.7 MHz paths whose slack varied
+	-- from fit to fit and was 1% tighter in NTSC than in PAL; the symptoms were fit-dependent PCM
+	-- pops and BIOS hangs in NTSC. Registering the outputs at MCLK adds 9.3 ns (a ninth of a CPU
+	-- clock), which lands in the same CE_F sample of the gate array as the direct outputs did, so
+	-- the bus-cycle timing verified on the bench (DTACK windows at 4/8/12 CLK) is unchanged.
+	process( MCLK )
+	begin
+		if rising_edge(MCLK) then
+			r_address <= n_address;
+			r_data_o  <= n_data_o;
+			r_as_n    <= n_strobe_z or n_as;
+			r_uds_n   <= n_strobe_z or n_uds;
+			r_lds_n   <= n_strobe_z or n_lds;
+			r_rnw     <= n_rw_z or n_rw;
+			r_fc      <= n_fc or (n_fc_z & n_fc_z & n_fc_z);
+		end if;
+	end process;
+	A     <= r_address;
+	DO    <= r_data_o;
+	AS_N  <= r_as_n;
+	UDS_N <= r_uds_n;
+	LDS_N <= r_lds_n;
+	RNW   <= r_rnw;
+	FC    <= r_fc;
 	BG_N  <= n_bg;
 	VMA_N <= '1';
 	RESET_O_N <= not n_reset_pull;
