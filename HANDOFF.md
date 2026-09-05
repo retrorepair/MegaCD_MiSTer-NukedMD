@@ -299,3 +299,12 @@ Posted PRG-RAM write DTACK was released only in PRS_END, which a posted write do
 before the CPU's next cycle: DTACK stayed low into the next access (telemetry min AS->DTACK
 0 ns), that cycle ended at once with stale data -> corrupted BIOS screen, then a crash.
 Build 22: DTACK release on strobe negation in every state; PRS_END -> IDLE when released.
+
+## Build 22 (2026-09-05 10:40) — boots, but the read-after-write hazard remains
+BIOS runs, verificator as build 20 (VAR OK, IRQ 0A). Telemetry still shows PRG-RAM min
+AS->DTACK 0 ns: after a write is accepted the PRS machine returns to IDLE before the SDRAM
+write completes, so the next read is issued while the port is still busy, PRS_WAIT takes the
+residual PRG_RDY=0 as "read accepted", acknowledges early and captures the write's completion
+as read data. Build 23: a new PRG-RAM request (sub-CPU or DMA) is issued only when PRG_RDY=1.
+Note: the flow now writes output_files/MegaCD_TEST_NukedMD_20260904_<build>.rbf (build_id.tcl
+naming), not MegaCD.rbf - the first "build 22" deploy silently re-sent build 20.

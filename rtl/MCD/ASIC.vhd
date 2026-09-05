@@ -1416,7 +1416,10 @@ begin
 --							PRG_RAM_RFS <= '1';
 --							PRSS <= PRS_REFRESH_WAIT;
 --						els
-						if DMA_PRG_RAM_SEL = '1' and SBRQ = '0' and SRES = '1' then
+						-- A new request is issued only when the SDRAM port is idle (PRG_RDY = '1'): the
+						-- previous write may still be in progress after its acknowledge, and PRS_WAIT takes
+						-- PRG_RDY = '0' as "this request accepted".
+						if DMA_PRG_RAM_SEL = '1' and SBRQ = '0' and SRES = '1' and PRG_RDY = '1' then
 							PRG_RAM_ADDR <= DMA_ADDR;
 							PRG_RAM_DO <= DMA_DAT;
 							if DMA_ADDR(18 downto 9) >= "00"&WP then
@@ -1431,7 +1434,7 @@ begin
 								PRSS <= PRS_END;
 							end if;
 							PR_DMA_RUN <= '1';
-						elsif S68K_PRG_RAM_SEL = '1' and S68K_PRGRAM_DTACK_N = '1' then
+						elsif S68K_PRG_RAM_SEL = '1' and S68K_PRGRAM_DTACK_N = '1' and PRG_RDY = '1' then
 							PRG_RAM_ADDR <= S68K_A(18 downto 1);
 							PRG_RAM_DO <= S68K_DI;
 							if S68K_RNW = '1' or S68K_A(18 downto 9) >= "00"&WP then
