@@ -478,3 +478,13 @@ the verificator (only CDC REGS 01 / CDC FLAGS 40 failed) settles it if the conso
 50 Hz: then A is hardware-true; if it was at 60 Hz, B is.
 Board state: MegaCD.CFG byte0 0x88 (region forced US) and byte4 0x10 (Keep Running) set;
 /media/fat/cifs/MegaCD/boot.rom is still the JP BIOS (EU original in boot.rom.eu_backup).
+
+## 2026-09-05 19:45 — the sub-CPU clock is the Mega CD's own (documented)
+RetroTechCollection, "Sega CD (Model 1)": the 12.5 MHz sub-CPU clock (25 MHz / 2) is generated
+on the Sega CD board and supplied to the console on expansion connector pin B25 "CDCLK 12.5 MHz
+clock from Sega CD"; the console supplies "EXCLK 7.67 MHz clock from Genesis" on B26. So the
+sub-CPU, its timer, the PCM sample clock and the CDC run at the same speed in a 50 Hz machine
+as in a 60 Hz one, and only the console side slows down by 0.9% in PAL: variant B is the
+hardware-true model. Consequence for the verificator: its VAR / IRQ 09 / REG 8030 windows
+encode the 60 Hz console-to-Mega CD ratio, so a real 50 Hz console fails them by 0.9% too
+(the owner's real-hardware pass implies that run was at 60 Hz - to confirm).
