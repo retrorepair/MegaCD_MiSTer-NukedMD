@@ -514,3 +514,8 @@ console (real or emulated) they read 0.9% off. Build 31 = this + registered sub-
   22/26/27/30/40-42/46, REG X002 03/29/2B, REG 2006 02/03/05 (as CD boot ROM), WORD RAM 20.
 - jgenesis 178 (Thunder Storm FX) and 100 (Radical Rex): drive-side behaviours, see
   tools/main_patches/README.md.
+- SpritesMind t=3166 (Mask of Destiny, BlastEm): on a Sega CD 2 (LC89515) and a Wondermega M1
+  (LC8951) the verificator fails CDC REGS 01 and CDC FLAGS 40 (error value 25); only the CDX /
+  Multi-Mega / X'Eye / Wondermega M2 CDC (LC8913/LC89513, 5-bit address register) passes them.
+  This is the origin of the earlier "model 2 fails CDC REGS 01 / CDC FLAGS 40" note (not an
+  owner measurement). The core models the Model 1/2 CDC, so CDC REGS 01 is correct behaviour.
