@@ -1,84 +1,77 @@
-# NukedMD die-level models → RTL, one module at a time
+# NukedMD die-level models → synthesis-friendly Verilog, 1:1, one module at a time
 
-Why: the die-level models (netlists of latch primitives from `ym_lib.v`, evaluated on a 107 MHz
-sampling clock, two samples per 53.7 MHz master clock) are about half the core, force the
-107 MHz domain, and hold every failing timing path of every fit (VDP address decode → bus mux,
--1.8 to -2.2 ns at the slow corner, structural, not congestion). RTL modules run at the master
-clock, use a fraction of the registers, and can be read. The accuracy the die models bought
-(cycle-exact bus behaviour, verified by the mcd-verificator) must survive each step, so every
-module is replaced behind an equivalence bench before it is committed.
+## What "1:1" means here
 
-## Inventory (fitter "by entity", test build; lines from the source files)
+Nothing of nukedmd's logic is replaced. Every gate equation and every storage element of the
+die models is kept; only their *representation* changes, from "latches sampled twice per
+master clock on a 107 MHz clock, with the chips' internal clocks carried as data" to
+"flip-flops on the 53.7 MHz master clock with one enable per internal clock phase". The
+result computes the same values at the same master-clock edges, so it can be proven
+equivalent module by module by simulation, and it synthesises like ordinary RTL: one clock
+domain, no oversampling, half the registers, no combinational paths between latch phases
+spanning the 107 MHz period (the source of every failing path in every fit so far).
 
-| Module | File(s) | Lines | ALMs | Registers | Notes |
+## How the die models are written today (from ym_lib.v, 68k.v, z80.v)
+
+| Form | Today | 1:1 replacement |
+|---|---|---|
+| `ym_dlatch_1/2`, `ym_slatch` (transparent latch: `mem <= c1 ? inp : mem` every MCLK) | latch emulated at 2× the master clock | `always @(posedge clk) if (c1_en) mem <= inp;` where `c1_en` is the master-clock enable of that clock phase; outputs read `mem` (closed latch value); where the die reads a latch *while it is open*, the consumer takes `inp` in that phase, written explicitly |
+| `ym_sdff` (master-slave pair: `l1 <= val` while clk low, `l2 <= l1` while high) | two registers, two samples | one DFF: `if (clk_rise_en) q <= val;` |
+| `ym_rs_trig`, `ym_rs_trig_sync`, `z80_rs_trig_*` (set/reset latches) | evaluated every MCLK | set/reset flip-flop at the master clock; set and reset are logic signals of the same clocks, so a one-master-clock resolution reproduces the die model exactly |
+| `ym_sr_bit`, `ym_cnt_bit*`, `ym_delaychain` (shift/counter cells built from the above) | composite | same composition on the converted primitives; counters become `q <= q + 1` under the same enable |
+| 68k.v / z80.v inline latches (`always @(posedge MCLK) if (c1) l1 <= ...`, 99 and 44 blocks) | same idea, hand-written | the same block with `c1_en` replacing `c1`, at the master clock |
+| The chips' internal clock generators (`mclk_and1`, `dclk`, `hclk1`, CPU `clk1/clk2`, FM `clk1/clk2`) | logic nets sampled at 107 MHz | the same divider logic, but its outputs become *enables* (one master-clock pulse on each edge of the internal clock) that gate the flip-flops above |
+
+A latch whose data input changes while it is open and whose output is consumed in the same
+phase is the one construct that needs a human decision (feed-through vs. captured value); the
+transformer flags these and they are resolved with the equivalence bench, never guessed.
+
+## Tooling
+
+A transformer script (Python, kept in `tools/`) does the regular part: instance-by-instance
+replacement of the ym_lib primitives, inline latch blocks and rs triggers, and generation of
+the enable signals from each module's clock generator nets. Its output is committed as
+readable Verilog (named signals kept from the netlist, comments carried over), not
+regenerated on every build. Irregular constructs are listed by the script and converted by
+hand with the bench watching.
+
+## Proof, for every module, before it is committed
+
+1. **A/B equivalence bench** (ModelSim; the `sim_sub` bench is the template): die model and
+   converted module instantiated side by side, same stimulus, every output and every named
+   storage element compared at every master clock edge; the bench stops at the first
+   difference and prints the cycle and the net. Stimulus: recorded bus traces from the MiSTer
+   telemetry and board-level simulation covering the verificator's tests for that chip and a
+   game boot.
+2. **Hardware gates**: mcd-verificator identical or better (build 35 baseline), the 240p test
+   suite for anything touching the VDP, the JP BIOS menu 15 minutes with music, three games
+   including one PAL. Numbers into STATS.md.
+3. The die model stays in the tree behind a define for two further modules so a regression
+   bisects in one build.
+
+## Order
+
+| Step | Module | Lines | Primitives | ALMs today | Why here |
 |---|---|---|---|---|---|
-| ym7101 VDP (+PSG) | ym7101.v | 7,367 | 5,034 | 10,158 | the hard one; all failing paths live here |
-| m68kcpu ×2 (main, Mega CD sub) | 68k.v (+ucode/nanocode ROMs, 14 M10K each) | 6,299 | 3,500 + 4,000 | 2,340 + 2,360 | die model gives the verified bus timing |
-| vram | vram.v | 115 | 2,524 | 2,115 | DRAM (serial access) model for the VDP; 56 M10K |
-| z80cpu | z80.v | 4,091 | 1,067 | 1,200 | |
-| ym3438 FM | ym3438*.v (11 files) | ~4,500 | 994 | 6,590 | registers = FM pipeline shift registers |
-| ym6046 I/O | ym6046.v | 544 | 300 | 553 | pads, controller ports |
-| ym6045 arbiter | ym6045.v | 879 | 114 | 201 | bus arbiter, refresh |
-| tmss | tmss.v | 139 | 22 | 41 | |
-| md_board | md_board.v | 947 | glue | | already modified once (expansion connector) |
-| fc1004 | fc1004.v | 681 | wrapper | | instantiates VDP, arbiter, I/O, FM, TMSS |
-
-Mega CD side (VHDL, already RTL): gate array 1,750 ALMs, PCM 505, CDC 197, sub-CPU cheat
-engine 1,147, main cheat engine 1,131; framework ~7,200.
-
-## Method for every module (no exceptions)
-
-1. **Interface freeze.** The RTL module keeps the die model's port list and its cycle
-   behaviour at those ports (what the rest of the board sees), not its internal structure.
-   Where the die model changes an output on the second 107 MHz sample of a master clock, the
-   RTL module registers it at the master clock edge that produces the same value by the time
-   any consumer samples it; each such case is written down.
-2. **Equivalence bench (ModelSim, scratchpad `sim_*`, pattern of `sim_sub`).** Both versions
-   are driven by the same recorded stimulus (bus traces from the MiSTer telemetry or from a
-   board-level simulation) and every output is compared per master clock; the bench fails on
-   the first difference and prints the cycle. Stimulus must cover the verificator's tests for
-   that chip and at least one game's boot.
-3. **Hardware gates before commit:** mcd-verificator identical or better (NTSC: VAR OK,
-   REG 8030 OK, IRQ 0A, COLOR CALC OK from build 35), 240p test suite for the VDP, the JP BIOS
-   menu 15 minutes with music, three games (one PAL). Timing and ALM numbers into STATS.md.
-4. One module per pull; the die model stays in the tree behind a define until two modules
-   later, so any regression can be bisected in one build.
-
-## Order (lowest risk and most learning first)
-
-1. **tmss** (139 lines): trivial; establishes the bench harness and the interface-freeze
-   discipline. Half a day.
-2. **ym6045 arbiter** (879 lines): small, but it drives RAS/CAS/DTACK/refresh timing that the
-   verificator's VAR test and the sub-CPU handshakes depend on; the bench must reproduce the
-   68000 bus cycles exactly. Two to three days. This is also where the refresh-stall behaviour
-   jgenesis needed (2 of 172 mclk) is visible and documentable.
-3. **ym6046 I/O** (544 lines): controller ports, Z80 bus request/reset, version register.
-   One to two days.
-4. **z80cpu** (4,091 lines, 1,067 ALMs): a behavioural cycle-accurate Z80 already exists in
-   the MiSTer ecosystem (T80 with cycle timing); the bench compares against the die model on
-   the sound-driver workloads. Two to four days, mostly validation.
-5. **ym3438 FM** (994 ALMs, 6,590 registers): the biggest register saving. Candidate: jt12
-   (behavioural YM2612/YM3438, used by other MiSTer cores) behind the same port list, with the
-   die model's register-write timing and the "FM chip" OSD selection preserved. Validation is
-   audio-level (bit-exact per sample against the die model on recorded register streams).
-   One to two weeks.
-6. **vram + ym7101 VDP** (7,558 ALMs, 12,273 registers): only after 1-5, with the 107 MHz
-   domain then holding just the VDP and the CPUs. This is a new VDP implementation validated
-   against the die model, not an edit; several weeks. Decide then whether the payoff (timing
-   headroom, readability) justifies it, or whether the die-model VDP stays as the one
-   remaining netlist.
-7. **m68kcpu** stays as the die model for both CPUs. The verificator's timing tests pass
-   because of it; a behavioural replacement would have to prove the same bus timing first.
-   Revisit only if the sizes after 1-6 still do not fit the release shape with headroom.
-
-## What each step is expected to give
+| 1 | tmss | 139 | 6 | 22 | proves the transformer and the bench on something trivial |
+| 2 | ym6046 I/O | 544 | 40 | 300 | small, self-contained, controller ports easy to stimulate |
+| 3 | ym6045 arbiter | 879 | 57 | 114 | small but timing-critical (RAS/CAS/DTACK/refresh): the bench must show 68000 bus cycles identical; also documents the refresh behaviour jgenesis needed |
+| 4 | ym3438 FM | ~4,500 (11 files) | 191 | 994 ALMs, 6,590 regs | biggest register saving; audio compared sample-exact against the die model |
+| 5 | z80cpu | 4,091 | 44 blocks + 183 | 1,067 | inline-latch style, second CPU-type conversion before the 68000 |
+| 6 | vram + ym7101 VDP | 115 + 7,367 | 815 | 7,558 ALMs, 12,273 regs | the failing paths; largest and most irregular clocking (dclk/hclk/mclk families); after 1-5 the tooling is mature |
+| 7 | m68kcpu (×2) | 6,299 | 99 blocks | ~7,500 | last: its bus timing is what the verificator verifies; the same conversion, proven with the existing sub-CPU bench (DTACK windows 4/8/12) plus the verificator |
 
 Steps 1-5 remove roughly 2,500 ALMs and 8,500 registers and take the FM, Z80 and I/O out of
-the 107 MHz sampling domain (they move to 53.7 MHz), which shortens the fitter's job on the
-VDP paths as a side effect. They do not touch the paths that fail today; step 6 does.
+the 107 MHz domain; step 6 is where the timing headroom comes from; after step 7 the 107 MHz
+domain disappears (it exists only for the die models) and the whole core runs at 53.7 MHz.
+
+## Effort (honest, one person, with the bench discipline)
+
+Transformer: about a week. tmss 1 day; I/O 2 days; arbiter 3-4 days; FM 1-2 weeks; Z80 1-2
+weeks; VDP 4-6 weeks; 68000 3-4 weeks. Each step is independently useful and shippable.
 
 ## Not part of this plan
 
-- Changing the Mega CD side (already RTL) or Main.
-- Any accuracy change without a hardware measurement or a documented reference (jgenesis,
-  GPGX, SpritesMind) behind it, as in HANDOFF.md.
+- Behavioural replacements of any chip. The point is to keep nukedmd's logic exactly.
+- Changes to the Mega CD side (already RTL) or Main.
+- Any accuracy change without a measurement or a documented reference behind it.
