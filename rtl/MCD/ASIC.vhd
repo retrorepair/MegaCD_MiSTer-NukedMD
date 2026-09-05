@@ -1021,10 +1021,11 @@ begin
 									CDDC(35 downto 32) <= S68K_DI(11 downto 8);
 								end if;
 							when "0100110" =>			--$FF804C Font color
-								if S68K_LDS_N = '0' then
-									SC0 <= S68K_DI(3 downto 0);	
-									SC1 <= S68K_DI(7 downto 4);
-								end if;
+								-- /LDS and /UDS play no role for this register: a byte write at the even address FF804C
+								-- takes effect too (Genesis Plus GX 58accf0, verified on real hardware with the
+								-- mcd-verificator; this core failed its COLOR CALC test 05 on the gated version)
+								SC0 <= S68K_DI(3 downto 0);
+								SC1 <= S68K_DI(7 downto 4);
 							when "0100111" =>			--$FF804E Font bit
 								if S68K_LDS_N = '0' then
 									SB(7 downto 0) <= S68K_DI(7 downto 0);	
