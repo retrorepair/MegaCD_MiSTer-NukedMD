@@ -2314,10 +2314,28 @@ begin
 			PCM_RD_SEEN <= '0';
 		elsif rising_edge(CLK) then
 			if EN = '1' then
-				if S68K_PCM_SEL = '1' and S68K_PCM_DTACK_N = '1' and PCM_RDY = '1' then	-- PCM RAM is in SDRAM: wait for it (pcm_mem.sv)
-					S68K_PCM_DTACK_N <= '0';
+				-- PCM wave RAM lives in SDRAM (pcm_mem.sv). A read of the RAM window (FF2000-FF3FFF, S68K_A(13) = 1)
+				-- is issued by the PCM model on its next clock enable and answered by the SDRAM 100-300 ns later,
+				-- while the 68000 latches data 200 ns into the cycle: acknowledging it as soon as the path is idle
+				-- (right for the block RAM of the original core) returned the previous read's byte. So for RAM
+				-- reads wait until the read has been issued (PCM_RDY low) and completed (PCM_RDY high again).
+				-- Register accesses and writes (FIFO, posted) are acknowledged when the path is ready, as before.
+				if S68K_PCM_SEL = '1' and S68K_PCM_DTACK_N = '1' then
+					if S68K_RNW = '1' and S68K_A(13) = '1' then
+						if PCM_RD_SEEN = '0' then
+							if PCM_RDY = '0' then
+								PCM_RD_SEEN <= '1';
+							end if;
+						elsif PCM_RDY = '1' then
+							S68K_PCM_DTACK_N <= '0';
+							PCM_RD_SEEN <= '0';
+						end if;
+					elsif PCM_RDY = '1' then
+						S68K_PCM_DTACK_N <= '0';
+					end if;
 				elsif S68K_PCM_DTACK_N = '0' and S68K_LDS_N = '1' and S68K_UDS_N = '1' then
 					S68K_PCM_DTACK_N <= '1';
+					PCM_RD_SEEN <= '0';
 				end if;
 				
 				case PCMA is
