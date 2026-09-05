@@ -292,6 +292,7 @@ architecture rtl of ASIC is
 	signal PCM_DMA_WR 				: std_logic;
 	signal PCM_S68K_HALT 			: std_logic;
 	signal PCM_HALT_WAIT 			: unsigned(1 downto 0);
+	signal PCM_RD_SEEN				: std_logic;		-- a sub-CPU wave RAM read has been issued to the SDRAM path (PCM_RDY fell)
 	
 	signal HS 							: HaltState_t;
 	signal HALT_WAIT 					: unsigned(1 downto 0);
@@ -2310,6 +2311,7 @@ begin
 			PCM_DMA_WR <= '0';
 			PCM_DMA_RUN <= '0';
 			PCM_S68K_HALT <= '0';
+			PCM_RD_SEEN <= '0';
 		elsif rising_edge(CLK) then
 			if EN = '1' then
 				if S68K_PCM_SEL = '1' and S68K_PCM_DTACK_N = '1' and PCM_RDY = '1' then	-- PCM RAM is in SDRAM: wait for it (pcm_mem.sv)
