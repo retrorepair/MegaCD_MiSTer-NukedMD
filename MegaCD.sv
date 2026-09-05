@@ -1157,6 +1157,7 @@ mcd_debug mcd_debug
 	.mcd_do(MCD_DO), .sdram_dout(MCD_ROM_DO), .rom_busy(MCD_ROM_BUSY), .ras2_window(wram_window), .cart_dma(cart_dma), .exp_asel(exp_asel), .dma_rd(dma_rd),
 	.s68k_as_n(dbg_s68k_as_n), .s68k_dtack_n(dbg_s68k_dtack_n), .s68k_a(dbg_s68k_a[23:1]), .s68k_rnw(dbg_s68k_rnw),
 	.pcm_out_ce(dbg_pcm_out_ce), .pcm_l(MCD_PCM_SL), .pcm_r(MCD_PCM_SR), .aud_l(aud_l), .aud_r(aud_r),
+	.cdd_send(scd_cdd_send), .cdd_rec(scd_cdd_rec),
 	.pcm_smp_ce(dbg_pcm_smp_ce), .pcm_late(dbg_pcm_late), .pcm_we_n(dbg_pcm_we_n), .pcm_cs_n(dbg_pcm_cs_n), .s68k_ce_f(dbg_s68k_ce_f),
 	.DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD), .DDRAM_BUSY(DDRAM_BUSY)
 );

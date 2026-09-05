@@ -42,10 +42,10 @@ def show(w):
     smp_ce = w[18] >> 32; cef = w[18] & 0xFFFFFFFF
     pcm_wr = w[19] >> 32; pcm_seen = w[19] & 0xFFFFFFFF; pcm_late = w[20] >> 32
     print('  pcm sample_ce=%d ce_f=%d writes=%d seen_by_chip=%d late_fetch=%d' % (smp_ce, cef, pcm_wr, pcm_seen, pcm_late))
-    fresh_seq = w[21] >> 32; fresh_tag = w[21] & 0xFFFFFFFF; live = w[22] & 0xFF; ce_hi = w[23] >> 32
+    fresh_seq = w[21] >> 32; cdd_send = (w[21] >> 16) & 0xFFFF; cdd_rec = w[21] & 0xFFFF; live = w[22] & 0xFF; ce_hi = w[23] >> 32; sub_last = ((w[22] >> 8) & 0x7FFFFF) << 1
     win_min = (w[22] >> 48) & 0xFFFF; win_last = (w[22] >> 32) & 0xFFFF; irq_max = (w[23] >> 16) & 0xFFFF; irq_last = w[23] & 0xFFFF
-    print('  pcm record: word21 seq=%d tag=%08x (%s) live sp_ce=%d%d sp_late=%d%d sp_we=%d%d sp_cef=%d%d ce_high_clocks=%d'
-          % (fresh_seq, fresh_tag, 'fresh' if fresh_seq == seq and fresh_tag == 0xFEEDC0DE else 'STALE',
+    print('  record: word21 seq=%d (%s) cdd cmds=%d stats=%d  sub last reg=%06X  live sp_ce=%d%d sp_late=%d%d sp_we=%d%d sp_cef=%d%d ce_high_clocks=%d'
+          % (fresh_seq, 'fresh' if fresh_seq == seq else 'STALE', cdd_send, cdd_rec, sub_last,
              (live >> 7) & 1, (live >> 6) & 1, (live >> 5) & 1, (live >> 4) & 1, (live >> 3) & 1, (live >> 2) & 1, (live >> 1) & 1, live & 1, ce_hi))
     print('  int2: IFL2 write end -> sub write FF8026 last=%.2fus max=%.2fus | -> main read A12026 last=%.2fus min=%.2fus'
           % (irq_last * TICK_NS / 1000, irq_max * TICK_NS / 1000, win_last * TICK_NS / 1000, (0 if win_min == 0xFFFF else win_min) * TICK_NS / 1000))
