@@ -612,3 +612,10 @@ with stale PRG-RAM data; a spurious bit 7 runs the command handler with no comma
 and desynchronises the protocol. Kernel: Kosinski block at 0x16000 -> PRG-RAM 0 (21,466
 bytes). Tools: scratchpad/m68kdis.py (also /tmp/m68kdis.py on the MiSTer), /tmp/kos.py.
 Build 35 (fix) compiling as seeds 2 and 3.
+
+## Build 35 (2026-09-05 23:15) — deployed: hang fix + wave RAM read fix + font colour + Keep Running arming
+Seed 3: 37,547 ALMs, -1.87 @107 (TNS -586), -0.24 @53.7 (md5 e7f75363, on the card). Seed 2:
+-2.07 / -0.43. Soak running: JP BIOS, no disc, monitor every 20 s (CDD counters, PCM ring,
+word RAM and register rates, PRG-RAM minimum acknowledge, main CPU address) for 13 minutes.
+Expected if the fix is right: music stays on, PRG-RAM minimum acknowledge never 0 ns, no
+handshake loss. Then: verificator NTSC (COLOR CALC expected OK), Keep Running + disc.
