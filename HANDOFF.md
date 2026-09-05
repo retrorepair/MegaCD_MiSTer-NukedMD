@@ -554,3 +554,9 @@ PLACEMENT_EFFORT_MULTIPLIER 4.0 and ROUTER_TIMING_OPTIMIZATION_LEVEL MAXIMUM pro
 bit-identical rbf (md5 7f6ea523): with OPTIMIZATION_MODE "AGGRESSIVE PERFORMANCE" and physical
 synthesis already on, the fitter has no further effort setting to give; the remaining 107 MHz
 paths (VDP address decode -> VD bus register) need a logic change or lower utilisation.
+
+## Build 33 (2026-09-05 21:40) — deployed: hang telemetry
+37,698 ALMs, -1.84 @107 (TNS -370), -0.09 @53.7. Baseline, JP BIOS menu with music (no
+disc): CDD commands 75/s, statuses 75/s, statuses = commands + 6 since start; sub-CPU's last
+gate array/PCM address FF0010 / FF8034. Waiting for the owner's Reset & Eject to catch the
+hang and read the same words.
