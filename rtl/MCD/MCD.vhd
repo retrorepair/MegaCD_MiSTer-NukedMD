@@ -79,6 +79,7 @@ entity MCD is
 		-- bring-up telemetry: sub-CPU bus cycle observation
 		DBG_S68K_AS_N	: out std_logic;
 		DBG_S68K_DTACK_N : out std_logic;
+		DBG_S68K_RNW	: out std_logic;
 		DBG_PCM_SMP_CE	: out std_logic;
 		DBG_PCM_LATE	: out std_logic;
 		DBG_PCM_WE_N	: out std_logic;
@@ -258,6 +259,7 @@ begin
 
 	DBG_S68K_AS_N <= S68K_AS_N;
 	DBG_S68K_DTACK_N <= S68K_DTACK_N;
+	DBG_S68K_RNW <= S68K_RNW;
 	DBG_PCM_WE_N <= PCM_WE_N;
 	DBG_PCM_CS_N <= PCM_N;
 	DBG_S68K_CE_F <= S68K_CE_F;

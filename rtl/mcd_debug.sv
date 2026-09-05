@@ -65,7 +65,8 @@ module mcd_debug
 	// sub-CPU bus (53 MHz domain, sampled)
 	input             s68k_as_n,
 	input             s68k_dtack_n,
-	input       [3:0] s68k_a,       // A19..A16
+	input      [23:1] s68k_a,       // A23..A1
+	input             s68k_rnw,
 
 	// PCM chip (53 MHz domain, sampled)
 	input             pcm_smp_ce,   // sample enable (should be 520832 Hz)
@@ -186,10 +187,11 @@ reg [31:0] sub_cnt[5], sub_sum[5], sub_long[5];
 reg [15:0] sub_max[5], sub_min[5];
 integer r;
 
-wire [2:0] region_of = (s68k_a[3] == 1'b0) ? 3'd0 :                    // 00000-7FFFF PRG-RAM
-                       (s68k_a >= 4'h8 && s68k_a <= 4'hD) ? 3'd1 :     // 80000-DFFFF word RAM
-                       (s68k_a == 4'hF) ? 3'd2 :                        // F0000-FFFFF: PCM (F0-F7) or registers (F8-FF); split below by A16? no: A19..16 only
-                       (s68k_a == 4'hE) ? 3'd4 : 3'd2;                  // E0000 backup RAM
+wire [3:0] s68k_hi = s68k_a[19:16];
+wire [2:0] region_of = (s68k_hi[3] == 1'b0) ? 3'd0 :                    // 00000-7FFFF PRG-RAM
+                       (s68k_hi >= 4'h8 && s68k_hi <= 4'hD) ? 3'd1 :     // 80000-DFFFF word RAM
+                       (s68k_hi == 4'hF) ? 3'd2 :                        // F0000-FFFFF: PCM (F0-F7) or registers (F8-FF); split below by A16? no: A19..16 only
+                       (s68k_hi == 4'hE) ? 3'd4 : 3'd2;                  // E0000 backup RAM
 
 always @(posedge clk) begin
 	ss_as    <= {ss_as[0], s68k_as_n};
@@ -239,6 +241,36 @@ always @(posedge clk) begin
 	end
 end
 
+// INT2 response chain (verificator IRQ sub-test 0A): t0 = end of the main CPU write cycle that sets
+// IFL2 (A12000 upper byte, bit 8); irq_lat = t0 -> the sub-CPU write cycle to FF8026 (its INT2 handler
+// stores 2 in the status word there); win = t0 -> the next main CPU read of A12026 (COMSTA[3]).
+// All in 107 MHz clocks. Games trigger INT2 the same way but never write FF8026, so irq_lat only
+// updates while the verificator runs; win updates on any A12026 read after an INT2 trigger.
+reg  [1:0] ss_rnw;
+reg        ifl_cyc, irq_run;
+reg [15:0] irq_t, irq_lat_last, irq_lat_max, win_last, win_min;
+always @(posedge clk) begin
+	ss_rnw <= {ss_rnw[0], s68k_rnw};
+	if(s_as == 2'b10) ifl_cyc <= ~exp_rw & (va == 23'h509000);          // main /AS fell on a write to A12000
+	if(~old_dl & rom_download) begin
+		irq_lat_last <= 0; irq_lat_max <= 0; win_last <= 0; win_min <= 16'hFFFF; irq_run <= 0;
+	end
+	if(irq_run & ~&irq_t) irq_t <= irq_t + 1'd1;
+	if(s_as == 2'b01 & ifl_cyc & vd[8]) begin                          // write cycle ended with bit 8 set: INT2 requested
+		irq_run <= 1;
+		irq_t <= 0;
+	end
+	if(irq_run & ss_as == 2'b10 & ~ss_rnw[1] & (s68k_a == 23'h7FC013)) begin  // sub-CPU write to FF8026
+		irq_lat_last <= irq_t;
+		if(irq_t > irq_lat_max) irq_lat_max <= irq_t;
+	end
+	if(irq_run & s_as == 2'b10 & exp_rw & (va == 23'h509013)) begin      // main CPU read of A12026
+		win_last <= irq_t;
+		if(irq_t < win_min) win_min <= irq_t;
+		irq_run <= 0;
+	end
+end
+
 // periodic record write
 reg [20:0] tick;
 reg [31:0] seq;
@@ -284,8 +316,8 @@ always @(posedge clk) begin
 			19: DDRAM_DIN <= {pcm_wr_cnt, pcm_wr_seen_cnt};
 			20: DDRAM_DIN <= {pcm_late_cnt, 32'd0};
 			21: DDRAM_DIN <= {seq, 32'hFEEDC0DE};                      // freshness check: must track word 1's seq
-			22: DDRAM_DIN <= {11'd0, tick, 24'd0, sp_ce, sp_late, sp_we, sp_cef}; // live samples of the PCM synchronizers
-			23: DDRAM_DIN <= {ce_hi_cnt, 32'd0};
+			22: DDRAM_DIN <= {win_min, win_last, 24'd0, sp_ce, sp_late, sp_we, sp_cef}; // INT2 window + live PCM synchronizer samples
+			23: DDRAM_DIN <= {ce_hi_cnt, irq_lat_max, irq_lat_last};
 			default: DDRAM_DIN <= trace[idx[3:0]];
 		endcase
 		idx <= idx + 1'd1;
