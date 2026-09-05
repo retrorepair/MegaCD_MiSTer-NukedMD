@@ -473,9 +473,8 @@ are NTSC-ratio windows; what real 50 Hz hardware does decides the model:
   i.e. the sub-CPU scales with the console clock (12.386 MHz in PAL) as in builds 17-29;
 - variant B (scratchpad seed3/, SEED 2): IN_CLK by region (12.5 MHz in PAL) and the CDC frame
   by PALSW, i.e. a region-independent Mega CD crystal.
-Both include the work RAM write register stage (build 31). The owner's real model 2 run of
-the verificator (only CDC REGS 01 / CDC FLAGS 40 failed) settles it if the console was at
-50 Hz: then A is hardware-true; if it was at 60 Hz, B is.
+Both include the work RAM write register stage (build 31). CORRECTION: there is no real-hardware run to lean on (misattribution). Decided by the documented
+clock source and by Genesis Plus GX / jgenesis, which both model a fixed 50 MHz CD clock: variant B.
 Board state: MegaCD.CFG byte0 0x88 (region forced US) and byte4 0x10 (Keep Running) set;
 /media/fat/cifs/MegaCD/boot.rom is still the JP BIOS (EU original in boot.rom.eu_backup).
 
@@ -487,4 +486,14 @@ sub-CPU, its timer, the PCM sample clock and the CDC run at the same speed in a 
 as in a 60 Hz one, and only the console side slows down by 0.9% in PAL: variant B is the
 hardware-true model. Consequence for the verificator: its VAR / IRQ 09 / REG 8030 windows
 encode the 60 Hz console-to-Mega CD ratio, so a real 50 Hz console fails them by 0.9% too
-(the owner's real-hardware pass implies that run was at 60 Hz - to confirm).
+(CORRECTION: nobody here ran the verificator on real hardware; the "real model 2" claim in these notes was a misattribution).
+
+## 2026-09-05 19:50 — decision: variant B (fixed 50 MHz Mega CD clock) is the model
+Evidence: expansion connector pin B25 CDCLK 12.5 MHz is driven by the Mega CD (RetroTech
+Collection); Genesis Plus GX core/cd_hw/scd.h: `#define SCD_CLOCK 50000000` with ~3184 SCD
+clocks per line on NTSC and ~3214 on PAL; jgenesis backend/segacd-core/src/api.rs:
+`SEGA_CD_MASTER_CLOCK_RATE = 50_000_000`, Sega CD cycles derived against the NTSC or PAL
+Genesis master clock. The repo now carries this (mcd_cegen IN_CLK by region, CDC frame by
+PALSW). Verificator consequence: VAR / IRQ 09 / REG 8030 are 60 Hz-ratio windows; in a 50 Hz
+console (real or emulated) they read 0.9% off. Build 31 = this + registered sub-CPU outputs
++ work RAM write stage, compiling as seeds 2 and 3 (scratchpad seed3/ and seed2/).

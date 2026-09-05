@@ -815,9 +815,9 @@ CEGen mcd_cegen
 (
 	.CLK(clk_sys),
 	.RST_N(~sys_reset),
-	.IN_CLK(53693175),  // deliberately not region switched: with the PAL clock this gives 12.386 MHz, and the verificator's
-	                    // timing tests (VAR, IRQ 09, REG 8030), which pass on real PAL hardware, pass only with that ratio;
-	                    // an exact 12.5 MHz in PAL fails all three by 0.9% (build 30). The Mega CD side scales with the console.
+	.IN_CLK(PAL ? 53203423 : 53693175), // the Mega CD has its own 50 MHz clock (CDCLK 12.5 MHz is supplied TO the console on the expansion
+	                                     // connector); Genesis Plus GX (SCD_CLOCK 50000000) and jgenesis (SEGA_CD_MASTER_CLOCK_RATE 50_000_000)
+	                                     // model it fixed while the console clock changes with the region, so derive it from the actual clock.
 	.OUT_CLK(50000000),
 	.CE(mcd_en)
 );
