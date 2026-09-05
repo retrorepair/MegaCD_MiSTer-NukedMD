@@ -81,6 +81,7 @@ entity MCD is
 		DBG_S68K_DTACK_N : out std_logic;
 		DBG_S68K_RNW	: out std_logic;
 		DBG_PCM_SMP_CE	: out std_logic;
+		DBG_PCM_OUT_CE	: out std_logic;
 		DBG_PCM_LATE	: out std_logic;
 		DBG_PCM_WE_N	: out std_logic;
 		DBG_PCM_CS_N	: out std_logic;
@@ -458,7 +459,8 @@ begin
 		
 		SL   			=> PCM_SL,
 		SR   			=> PCM_SR,
-		DBG_SAMPLE_CE => DBG_PCM_SMP_CE
+		DBG_SAMPLE_CE => DBG_PCM_SMP_CE,
+		DBG_OUT_CE => DBG_PCM_OUT_CE
 	);
 	
 	-- PCM wave RAM lives in SDRAM (not enough M10K with the NukedMD chipset), see pcm_mem.sv

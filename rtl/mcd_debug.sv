@@ -74,6 +74,9 @@ module mcd_debug
 	input             pcm_we_n,     // PCM write strobe (from the sub-CPU or DMA)
 	input             pcm_cs_n,     // PCM chip select
 	input             s68k_ce_f,    // 12.5 MHz falling-edge enable (the PCM samples its strobes on it)
+	input             pcm_out_ce,   // PCM chip output sample updated (32552 Hz)
+	input      [15:0] pcm_l, pcm_r, // PCM chip output
+	input      [15:0] aud_l, aud_r, // mixed core audio (input of audio_fix)
 
 	// DDR3
 	output reg  [7:0] DDRAM_BURSTCNT,
@@ -271,6 +274,22 @@ always @(posedge clk) begin
 	end
 end
 
+// PCM output capture: one 64-bit entry {pcm_l, pcm_r, aud_l, aud_r} per PCM output sample into an
+// 8192-entry ring (64 KB) at CAP_BASE; cap_ptr (record word 20) is the next write position.
+localparam [28:0] CAP_BASE = BASE + 29'h2000;   // byte address 0x3E010000
+reg  [1:0] sp_oce;
+reg [63:0] cap_fifo[4];
+reg  [2:0] cap_wr = 0, cap_rd = 0;
+reg [12:0] cap_ptr = 0;
+reg        busy_c = 0;
+always @(posedge clk) begin
+	sp_oce <= {sp_oce[0], pcm_out_ce};
+	if(sp_oce == 2'b01 && (cap_wr - cap_rd) != 3'd4) begin
+		cap_fifo[cap_wr[1:0]] <= {pcm_l, pcm_r, aud_l, aud_r};
+		cap_wr <= cap_wr + 1'd1;
+	end
+end
+
 // periodic record write
 reg [20:0] tick;
 reg [31:0] seq;
@@ -280,7 +299,7 @@ wire [15:0] flags = {locked, m68k_halt, m68k_reset, rom_download, led_g, led_r, 
 
 always @(posedge clk) begin
 	tick <= tick + 1'd1;
-	if(!busy_w) begin
+	if(!busy_w && !busy_c) begin
 		DDRAM_WE <= 0;
 		if(&tick) begin
 			busy_w <= 1;
@@ -289,6 +308,22 @@ always @(posedge clk) begin
 			DDRAM_ADDR <= BASE;
 			DDRAM_BURSTCNT <= 40;
 			DDRAM_BE <= 8'hFF;
+		end
+		else if(cap_wr != cap_rd) begin                      // one captured PCM sample: single-beat write
+			busy_c <= 1;
+			DDRAM_ADDR <= CAP_BASE | cap_ptr;
+			DDRAM_BURSTCNT <= 1;
+			DDRAM_BE <= 8'hFF;
+			DDRAM_DIN <= cap_fifo[cap_rd[1:0]];
+			DDRAM_WE <= 1;
+		end
+	end
+	else if(busy_c) begin
+		if(!DDRAM_BUSY) begin
+			DDRAM_WE <= 0;
+			busy_c <= 0;
+			cap_rd <= cap_rd + 1'd1;
+			cap_ptr <= cap_ptr + 1'd1;
 		end
 	end
 	else if(!DDRAM_BUSY) begin
@@ -314,7 +349,7 @@ always @(posedge clk) begin
 			17: DDRAM_DIN <= {sub_max[4], sub_min[4], sub_long[4]};
 			18: DDRAM_DIN <= {smp_ce_cnt, cef_cnt};
 			19: DDRAM_DIN <= {pcm_wr_cnt, pcm_wr_seen_cnt};
-			20: DDRAM_DIN <= {pcm_late_cnt, 32'd0};
+			20: DDRAM_DIN <= {pcm_late_cnt, 19'd0, cap_ptr};
 			21: DDRAM_DIN <= {seq, 32'hFEEDC0DE};                      // freshness check: must track word 1's seq
 			22: DDRAM_DIN <= {win_min, win_last, 24'd0, sp_ce, sp_late, sp_we, sp_cef}; // INT2 window + live PCM synchronizer samples
 			23: DDRAM_DIN <= {ce_hi_cnt, irq_lat_max, irq_lat_last};

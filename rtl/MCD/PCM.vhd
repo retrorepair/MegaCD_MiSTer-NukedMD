@@ -29,7 +29,8 @@ entity PCM is
 		
 		SL				: out signed(15 downto 0);
 		SR				: out signed(15 downto 0);
-		DBG_SAMPLE_CE : out std_logic	-- telemetry
+		DBG_SAMPLE_CE : out std_logic;	-- telemetry
+		DBG_OUT_CE	: out std_logic	-- telemetry: one clock when LOUT/ROUT update (32552 Hz)
 	);
 end PCM;
 
@@ -73,6 +74,7 @@ architecture rtl of PCM is
 	signal LOUT, ROUT : signed(15 downto 0);
 		
 	signal PCM_REF   : integer;
+	signal OUT_CE    : std_logic;
 	
 	impure function CLAMP16(a: unsigned(16 downto 0)) return unsigned is
 		variable res: unsigned(15 downto 0); 
@@ -233,6 +235,7 @@ begin
 			STEP <= '0';
 		elsif rising_edge(CLK) then
 			RAM_DI <= RAM_DI_B;
+			OUT_CE <= '0';
 			if ENABLE = '1' and SAMPLE_CE = '1' then
 				STEP <= not STEP;
 				if STEP = '0' then
@@ -263,6 +266,7 @@ begin
 					end if;
 					
 					if CH = 7 then
+						OUT_CE <= '1';
 						LOUT <= signed( CLAMP16(SUM17L) );
 						ROUT <= signed( CLAMP16(SUM17R) );
 						LSUM <= (others => '0');
@@ -285,6 +289,7 @@ begin
 	
 	SL <= LOUT;
 	DBG_SAMPLE_CE <= SAMPLE_CE;
+	DBG_OUT_CE <= OUT_CE;
 	SR <= ROUT;
 
 end rtl;

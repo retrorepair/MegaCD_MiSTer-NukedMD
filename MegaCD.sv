@@ -750,7 +750,7 @@ assign exp_data_en = ~mcd_dtack_n_r & exp_rw;
 wire [15:0] MCD_DO;
 wire        MCD_DTACK_N;
 wire        dbg_s68k_as_n, dbg_s68k_dtack_n, dbg_s68k_rnw;   // telemetry: sub-CPU bus cycles
-wire        dbg_pcm_smp_ce, dbg_pcm_late, dbg_pcm_we_n, dbg_pcm_cs_n, dbg_s68k_ce_f; // telemetry: PCM chip
+wire        dbg_pcm_smp_ce, dbg_pcm_late, dbg_pcm_we_n, dbg_pcm_cs_n, dbg_s68k_ce_f, dbg_pcm_out_ce; // telemetry: PCM chip
 wire [23:0] dbg_s68k_a;                        // MCD exports the sub-CPU address (existing debug port)
 
 wire [15:0] MCD_PCM_SL;
@@ -880,6 +880,7 @@ MCD MCD
 	.DBG_S68K_DTACK_N(dbg_s68k_dtack_n),
 	.DBG_S68K_RNW(dbg_s68k_rnw),
 	.DBG_PCM_SMP_CE(dbg_pcm_smp_ce),
+	.DBG_PCM_OUT_CE(dbg_pcm_out_ce),
 	.DBG_PCM_LATE(dbg_pcm_late),
 	.DBG_PCM_WE_N(dbg_pcm_we_n),
 	.DBG_PCM_CS_N(dbg_pcm_cs_n),
@@ -1025,30 +1026,6 @@ sdram sdram
 ///////////////////////////////////////////////////
 // Bring-up telemetry (test core)
 
-`ifdef MCD_TELEMETRY
-mcd_debug mcd_debug
-(
-	.clk(clk_ram),
-	.exp_as(exp_as), .exp_rw(exp_rw), .exp_rom(exp_rom), .exp_ras2(exp_ras2), .exp_fdc(exp_fdc),
-	.mcd_dtack_n(MCD_DTACK_N), .bus_dtack(exp_dtack),
-	.va(cart_addr), .vd(cart_data_wr), .cart_cs(cart_cs), .cart_oe(cart_oe), .vclk(VCLK), .vs(vs), .hs(hs),
-	.prg_rd(~MCD_PRG_OE_N), .prg_wr(~MCD_PRG_WRL_N | ~MCD_PRG_WRH_N),
-	.md_reset(md_reset), .btn_reset(btn_reset), .sys_reset(sys_reset), .mcd_rst_n(MCD_RST_N),
-	.rom_cart_mode(rom_cart_mode), .region(region), .led_r(MCD_LED_RED), .led_g(MCD_LED_GREEN), .locked(locked),
-	.rom_download(rom_download), .ioctl_wr(ioctl_wr), .m68k_reset(exp_m68k_reset), .m68k_halt(exp_m68k_halt),
-	.mcd_do(MCD_DO), .sdram_dout(MCD_ROM_DO), .rom_busy(MCD_ROM_BUSY), .ras2_window(wram_window), .cart_dma(cart_dma), .exp_asel(exp_asel), .dma_rd(dma_rd),
-	.s68k_as_n(dbg_s68k_as_n), .s68k_dtack_n(dbg_s68k_dtack_n), .s68k_a(dbg_s68k_a[23:1]), .s68k_rnw(dbg_s68k_rnw),
-	.pcm_smp_ce(dbg_pcm_smp_ce), .pcm_late(dbg_pcm_late), .pcm_we_n(dbg_pcm_we_n), .pcm_cs_n(dbg_pcm_cs_n), .s68k_ce_f(dbg_s68k_ce_f),
-	.DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD), .DDRAM_BUSY(DDRAM_BUSY)
-);
-`else
-assign DDRAM_BURSTCNT = 0;
-assign DDRAM_ADDR = 0;
-assign DDRAM_DIN = 0;
-assign DDRAM_BE = 0;
-assign DDRAM_WE = 0;
-assign DDRAM_RD = 0;
-`endif
 
 /////////////////////////////////////////////////
 // Audio
@@ -1136,6 +1113,33 @@ audio_fix #(250) audio_fix // MCLK/504 in lpf, so choose half to get in the midd
 	.l(status[58:57] ? cmp_l : aud_l),
 	.r(status[58:57] ? cmp_r : aud_r)
 );
+
+// telemetry sits after the audio section so it can tap the mixed audio registers
+`ifdef MCD_TELEMETRY
+mcd_debug mcd_debug
+(
+	.clk(clk_ram),
+	.exp_as(exp_as), .exp_rw(exp_rw), .exp_rom(exp_rom), .exp_ras2(exp_ras2), .exp_fdc(exp_fdc),
+	.mcd_dtack_n(MCD_DTACK_N), .bus_dtack(exp_dtack),
+	.va(cart_addr), .vd(cart_data_wr), .cart_cs(cart_cs), .cart_oe(cart_oe), .vclk(VCLK), .vs(vs), .hs(hs),
+	.prg_rd(~MCD_PRG_OE_N), .prg_wr(~MCD_PRG_WRL_N | ~MCD_PRG_WRH_N),
+	.md_reset(md_reset), .btn_reset(btn_reset), .sys_reset(sys_reset), .mcd_rst_n(MCD_RST_N),
+	.rom_cart_mode(rom_cart_mode), .region(region), .led_r(MCD_LED_RED), .led_g(MCD_LED_GREEN), .locked(locked),
+	.rom_download(rom_download), .ioctl_wr(ioctl_wr), .m68k_reset(exp_m68k_reset), .m68k_halt(exp_m68k_halt),
+	.mcd_do(MCD_DO), .sdram_dout(MCD_ROM_DO), .rom_busy(MCD_ROM_BUSY), .ras2_window(wram_window), .cart_dma(cart_dma), .exp_asel(exp_asel), .dma_rd(dma_rd),
+	.s68k_as_n(dbg_s68k_as_n), .s68k_dtack_n(dbg_s68k_dtack_n), .s68k_a(dbg_s68k_a[23:1]), .s68k_rnw(dbg_s68k_rnw),
+	.pcm_out_ce(dbg_pcm_out_ce), .pcm_l(MCD_PCM_SL), .pcm_r(MCD_PCM_SR), .aud_l(aud_l), .aud_r(aud_r),
+	.pcm_smp_ce(dbg_pcm_smp_ce), .pcm_late(dbg_pcm_late), .pcm_we_n(dbg_pcm_we_n), .pcm_cs_n(dbg_pcm_cs_n), .s68k_ce_f(dbg_s68k_ce_f),
+	.DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD), .DDRAM_BUSY(DDRAM_BUSY)
+);
+`else
+assign DDRAM_BURSTCNT = 0;
+assign DDRAM_ADDR = 0;
+assign DDRAM_DIN = 0;
+assign DDRAM_BE = 0;
+assign DDRAM_WE = 0;
+assign DDRAM_RD = 0;
+`endif
 
 ///////////////////////////////////////////////////
 // Backup RAM (internal), temp buffer for the RAM cartridge save file
