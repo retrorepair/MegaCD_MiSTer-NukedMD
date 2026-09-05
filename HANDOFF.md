@@ -619,3 +619,12 @@ Seed 3: 37,547 ALMs, -1.87 @107 (TNS -586), -0.24 @53.7 (md5 e7f75363, on the ca
 word RAM and register rates, PRG-RAM minimum acknowledge, main CPU address) for 13 minutes.
 Expected if the fix is right: music stays on, PRG-RAM minimum acknowledge never 0 ns, no
 handshake loss. Then: verificator NTSC (COLOR CALC expected OK), Keep Running + disc.
+
+## Conversion step 1 done: tmss (2026-09-05 23:30)
+rtl/nuked-md/tmss_rtl.v = tmss 1:1 (same ports, same assigns, ym_slatch -> `if (en) mem <= inp`,
+ym_sdffr/ym_sdffs kept as two registers because their clocks are bus-decode nets, not phases).
+Bench sim/tmss (tb_tmss.sv, compile.sh, run.sh; ModelSim): die model and tmss_rtl side by side,
+all 11 outputs and 8 storage registers compared twice per MCLK edge; seeds 1 and 7: 510,040 and
+610,032 compare points, 0 mismatches; two mutants caught (cycle 1 and cycle 1498). Not yet wired
+into the build (fc1004.v still instantiates `tmss`); switching is a one-line change behind a
+define once the arbiter and I/O are converted too, per the plan.
