@@ -130,6 +130,7 @@ Slack history:
 | 31 | 37,843 (90%) | 519 | -2.03 | +0.23 | work RAM write register stage; TNS  -360 ns (was -703); region-independent Mega CD clock; seed 2 (seed 3: -2.19 / -0.68) |
 | 32 | 37,846 (90%) | 519 | -1.85 | -0.41 | FF804C font colour byte write (COLOR CALC 05), Keep Running arms 3 s after the first BIOS load; PLACEMENT_EFFORT_MULTIPLIER 4 + ROUTER_TIMING_OPTIMIZATION_LEVEL MAXIMUM gave a bit-identical fit (no effect) |
 | 33 | 37,698 (90%) | 519 | -1.84 | -0.09 | build 32 + hang telemetry (CDD command/status counters, last sub-CPU register address); deployed (md5 fc280716) |
+| 33 RC | 36,196 (86%) | 519 | -1.77 | +0.25 | same sources without MCD_TELEMETRY (release shape, md5 01c33bb9): the remaining 107 MHz paths are structural (VDP address decode -> VD bus register), not congestion |
 
 The spread between seeds of one netlist is up to 4.3 ns at 107 MHz (build 27 vs 28), so every
 candidate is fitted with two or three seeds and the best one is deployed.

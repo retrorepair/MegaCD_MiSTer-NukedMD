@@ -560,3 +560,13 @@ paths (VDP address decode -> VD bus register) need a logic change or lower utili
 disc): CDD commands 75/s, statuses 75/s, statuses = commands + 6 since start; sub-CPU's last
 gate array/PCM address FF0010 / FF8034. Waiting for the owner's Reset & Eject to catch the
 hang and read the same words.
+
+## Release-shape fit (2026-09-05 22:20) — build 33 sources without telemetry
+36,196 ALMs (86%), -1.77 @107 (TNS -483), +0.25 @53.7, seed 2 (scratchpad
+rc_notelemetry_seed2.rbf, md5 01c33bb9). Dropping the 1,500 ALMs of telemetry buys ~0.1 ns:
+the 107 MHz failures (VDP address decode -> md_board VD register, -1.8 to -2.0 ns in every
+fit) are structural. Options left: (a) a logic change to that bus mux in md_board.v (the one
+nuked-md file already modified for the expansion connector; the expansion data term added a
+sixth source to the 16-bit VD OR-mux and could be folded into the cartridge term from
+MegaCD.sv) - needs the owner's OK since it is nuked-md; (b) accept, as the MegaDrive core
+does (the same VDP paths fail there by ~2 ns at the slow corner).
