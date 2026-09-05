@@ -547,3 +547,10 @@ lines) touches CLK_CNT/EN50, the timer divider, PRG-RAM DTACK, PCM_RDY and FF804
 CDD/INT4/IACK logic is the original's. hps_ext.v counts request toggles (Main cannot miss one).
 Next: build 33 telemetry (last sub register address, CDD command/status counters) read in the
 hung state right after a Reset & Eject.
+
+## Build 32 (2026-09-05 21:30) — font colour fix + Keep Running arming; not deployed (33 supersedes)
+37,846 ALMs, -1.85 @107 (TNS -549), -0.41 @53.7 (seed 2). The same sources with
+PLACEMENT_EFFORT_MULTIPLIER 4.0 and ROUTER_TIMING_OPTIMIZATION_LEVEL MAXIMUM produced a
+bit-identical rbf (md5 7f6ea523): with OPTIMIZATION_MODE "AGGRESSIVE PERFORMANCE" and physical
+synthesis already on, the fitter has no further effort setting to give; the remaining 107 MHz
+paths (VDP address decode -> VD bus register) need a logic change or lower utilisation.

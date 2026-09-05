@@ -128,6 +128,7 @@ Slack history:
 | 29 | 37,556 (90%) | 519 | -2.24 | -0.87 | PCM output capture ring, old sub-CPU wrapper (baseline) |
 | 30 | 37,653 (90%) | 519 | -1.91 | +0.13 | sub-CPU outputs registered at MCLK (53.7 MHz domain clean), seed 2 (seed 3: -2.45 / -0.43) |
 | 31 | 37,843 (90%) | 519 | -2.03 | +0.23 | work RAM write register stage; TNS  -360 ns (was -703); region-independent Mega CD clock; seed 2 (seed 3: -2.19 / -0.68) |
+| 32 | 37,846 (90%) | 519 | -1.85 | -0.41 | FF804C font colour byte write (COLOR CALC 05), Keep Running arms 3 s after the first BIOS load; PLACEMENT_EFFORT_MULTIPLIER 4 + ROUTER_TIMING_OPTIMIZATION_LEVEL MAXIMUM gave a bit-identical fit (no effect) |
 
 The spread between seeds of one netlist is up to 4.3 ns at 107 MHz (build 27 vs 28), so every
 candidate is fitted with two or three seeds and the best one is deployed.
