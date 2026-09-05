@@ -793,7 +793,8 @@ MCD MCD
 	.RST_N(~(md_reset | btn_reset)),
 	.CLK(clk_sys),
 	.MCLK(clk_ram),   // Nuked 68000 sub-CPU model sampling clock
-	.ENABLE(mcd_en),  // 50 MHz enable: the Mega CD runs from a 50 MHz crystal (sub-CPU, PCM and timer at 50/4 = 12.5 MHz)
+	.ENABLE(1'b1),   // every clock: the block's single-clock strobes (CD data, sample enables) must not be skipped
+	.EN50(mcd_en),    // 50 MHz enable for the sub-CPU clock phase counter only (50/4 = 12.5 MHz)
 	.MCD_RST_N(MCD_RST_N),
 	.PALSW(PAL),
 

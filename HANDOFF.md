@@ -308,3 +308,12 @@ residual PRG_RDY=0 as "read accepted", acknowledges early and captures the write
 as read data. Build 23: a new PRG-RAM request (sub-CPU or DMA) is issued only when PRG_RDY=1.
 Note: the flow now writes output_files/MegaCD_TEST_NukedMD_20260904_<build>.rbf (build_id.tcl
 naming), not MegaCD.rbf - the first "build 22" deploy silently re-sent build 20.
+
+## Build 24 (2026-09-05 11:20) — ENABLE gating regression (scratchy NTSC audio) fixed at the source
+Users and the owner heard scratchy audio in NTSC since build 18 (PAL fine). Cause: build 17 fed
+the 50 MHz CEGen into MCD.ENABLE, so every process gated by ENABLE skips one clock in 14.5;
+the CDDA and PCM sample enables (their own CEGens on CLK) and the CD sector data strobes from
+the HPS are single-clock pulses and were dropped ~7% of the time (CDDA/PCM samples, sector
+words). Fix: ENABLE back to 1 (as upstream) and a new EN50 port that only steps the gate
+array's CLK_CNT (sub-CPU 12.5 MHz clock, CE_F/CE_R for timer, CDC and PCM register timing).
+Build 23 (idle-port guard only) was aborted; build 24 carries the guard and this fix.

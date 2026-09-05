@@ -9,6 +9,7 @@ entity MCD is
 		MCLK				: in std_logic;	-- 107.38 MHz: sub-CPU gate-level model (M68K_WRAP)
 		RST_N				: in std_logic;
 		ENABLE			: in std_logic;
+		EN50				: in std_logic;	-- 50 MHz enable for the sub-CPU clock (ENABLE stays 1: the block's one-clock strobes and sample enables must not be skipped)
 		MCD_RST_N      : out std_logic;
 		PALSW				: in std_logic;
 
@@ -257,6 +258,7 @@ begin
 		CLK   			=> CLK,
 		RST_N       	=> RST_N,
 		ENABLE      	=> ENABLE,
+		CLK50_EN    	=> EN50,
 		
 		S68K_A   		=> S68K_A(23 downto 1),
 		S68K_DI   		=> S68K_DO,

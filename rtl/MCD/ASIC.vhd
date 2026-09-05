@@ -11,6 +11,7 @@ entity ASIC is
 		CLK				: in std_logic;
 		RST_N				: in std_logic;
 		ENABLE			: in std_logic;
+		CLK50_EN		: in std_logic;	-- 50 MHz enable: only the sub-CPU clock phase counter (12.5 MHz) steps on it
 		
 		S68K_A   		: in std_logic_vector(23 downto 1);
 		S68K_DI			: in std_logic_vector(15 downto 0);
@@ -303,14 +304,14 @@ begin
 	process( CLK )
 	begin
 		if rising_edge(CLK) then
-			if EN = '1' then
+			if CLK50_EN = '1' then
 				CLK_CNT <= CLK_CNT + 1;
 			end if;
 		end if;
 	end process;
 	
-	CLK_12M_F <= EN when CLK_CNT = "01" else '0';
-	CLK_12M_R <= EN when CLK_CNT = "11" else '0';
+	CLK_12M_F <= CLK50_EN when CLK_CNT = "01" else '0';
+	CLK_12M_R <= CLK50_EN when CLK_CNT = "11" else '0';
 	
 	
 	--Reset
