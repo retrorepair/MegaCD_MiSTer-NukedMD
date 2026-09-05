@@ -122,6 +122,14 @@ Slack history:
 | 20 | 37,136 (89%) | 519 | | | PRG-RAM read DTACK at SDRAM acceptance: VAR test passes |
 | 22 | 37,453 (89%) | 519 | -2.52 | -0.27 | posted PRG-RAM writes + DTACK release fix (read-after-write hazard remained) |
 | 24 | 37,580 (90%) | 519 | | | ENABLE back to 1 (CDDA/PCM/CD strobes no longer dropped), 50 MHz enable only on the sub-CPU clock counter, idle-port guard |
+| 25 | 37,676 (90%) | 519 | -2.97 | -0.74 | reset multicycle constraints, cartridge mapper on registered inputs |
+| 27 | 37,540 (90%) | 519 | -6.15 | -4.29 | seed 1 of the Keep Running / telemetry sources: a poor placement of the same netlist |
+| 28 | 37,543 (90%) | 519 | -1.84 | -0.32 | seed 2 of the same sources (seed 3: -2.65 / -0.77) |
+| 29 | 37,556 (90%) | 519 | -2.24 | -0.87 | PCM output capture ring, old sub-CPU wrapper (baseline) |
+| 30 | 37,653 (90%) | 519 | -1.91 | +0.13 | sub-CPU outputs registered at MCLK (53.7 MHz domain clean), seed 2 (seed 3: -2.45 / -0.43) |
+
+The spread between seeds of one netlist is up to 4.3 ns at 107 MHz (build 27 vs 28), so every
+candidate is fitted with two or three seeds and the best one is deployed.
 
 ## Bring-up numbers from the hardware telemetry
 
@@ -134,16 +142,22 @@ Slack history:
 
 ## mcd-verificator (krikzz, V1.02, run as a cartridge)
 
-Expected ranges from real hardware (jgenesis issue 105); real model-2 hardware also fails
-CDC REGS 01 (5-bit register index is a CDX trait) and the CDC INIT step needs a mounted disc.
+Expected ranges from the test source (jgenesis issue 105). On real hardware (SpritesMind thread
+3166, Mask of Destiny) a Sega CD 2 and a Wondermega M1 fail CDC REGS 01 and CDC FLAGS 40: only
+the CDX / Multi-Mega / X'Eye CDC (LC8913, 5-bit register index) passes them, so CDC REGS 01 is
+the correct Model 1/2 behaviour. The CDC INIT step needs a mounted disc. The VAR, IRQ 09 and
+REG 8030 windows were calibrated on a 60 Hz console; a 50 Hz console (real European Model 1,
+GPGX issue 408) fails them by the 0.9% clock ratio, and so does this core in PAL since the
+Mega CD clock became region independent (build 30).
 
-| Test | Expected | Upstream MegaCD | Build 12 (FX68K sub) | Build 17 | Build 18 | Build 20 |
-|---|---|---|---|---|---|---|
-| COLOR CALC | OK | ERR 05 | ERR 05 | ERR 05 | ERR 05 | ERR 05 |
-| VAR TESTS (sub-CPU memory loop) | 23753-23980 | 22744 | 22381 | 27906 | 26742 | OK |
-| IRQ TEST (128 back-to-back INT2) | 128 handled, 224-226 | 223 (ERR 09) | OK | 106 (ERR 06) | 122 (ERR 06) | ERR 0A (128/128 and 224-226 pass) |
-| REG 8030 (timer vs sub-CPU) | 1286-1288 | 1299 (ERR 07) | OK | OK | OK | OK |
-| REG X000/X002/2006/X00C, PROG/WORD RAM, WRAM PMOD | OK | OK | OK | OK | OK | OK |
+| Test | Expected | Upstream MegaCD | Build 12 (FX68K sub) | Build 17 | Build 18 | Build 20 | Build 30 NTSC | Build 30 PAL |
+|---|---|---|---|---|---|---|---|---|
+| COLOR CALC | OK | ERR 05 | ERR 05 | ERR 05 | ERR 05 | ERR 05 | ERR 05 (fix in build 32) | ERR 05 |
+| VAR TESTS (sub-CPU memory loop) | 23753-23980 | 22744 | 22381 | 27906 | 26742 | OK | OK | 23609 (ERR 02) |
+| IRQ TEST (128 back-to-back INT2) | 128 handled, 224-226 | 223 (ERR 09) | OK | 106 (ERR 06) | 122 (ERR 06) | ERR 0A (128/128 and 224-226 pass) | ERR 0A | 228 (ERR 09) |
+| REG 8030 (timer vs sub-CPU) | 1286-1288 | 1299 (ERR 07) | OK | OK | OK | OK | OK | 1275 (ERR 07) |
+| REG X000/X002/2006/X00C, PROG/WORD RAM, WRAM PMOD | OK | OK | OK | OK | OK | OK | OK | OK |
+| CDC REGS | OK on CDX-class CDC only | ERR 01 | ERR 01 | ERR 01 | ERR 01 | ERR 01 | ERR 01 | ERR 01 |
 
 Builds 12 and earlier ran the Mega CD block at 13.42 MHz (see HANDOFF); from build 17 it runs
 at 12.5 MHz, which is why the VAR count rose before the sub-CPU bus path was corrected.
