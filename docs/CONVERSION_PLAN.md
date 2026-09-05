@@ -75,3 +75,18 @@ weeks; VDP 4-6 weeks; 68000 3-4 weeks. Each step is independently useful and shi
 - Behavioural replacements of any chip. The point is to keep nukedmd's logic exactly.
 - Changes to the Mega CD side (already RTL) or Main.
 - Any accuracy change without a measurement or a documented reference behind it.
+
+## Precision note on the clock domains (added after scoping the pilot)
+
+The 107 MHz sampling clock exists because the die models represent both phases of the chips'
+internal clocks as data. For chips whose internal clocks are slower than the 53.69 MHz master
+clock (68000 at MCLK/7, Z80 at MCLK/15, FM at MCLK/7/6, arbiter and I/O strobes) the converted
+modules run cleanly at the master clock with enables, and their paths get the full 18.6 ns.
+The VDP is different: parts of it clock on both phases of MCLK itself (its pixel/serial logic),
+so a phase-to-phase path there has a 9.3 ns budget on the real chip as well. Converting it
+1:1 still removes the sampling mux level and the latch pairs from those paths (today's
+failures are 6-level paths where the chip has 2-3 gate levels), but those flip-flops keep
+clocking on both MCLK edges; the claim "no 107 MHz domain" therefore means "no oversampling",
+not "no half-period paths in the VDP". The pilot (tmss) stays on the sampling clock so that
+equivalence is exact; the board-wide move to master-clock enables is its own step after all
+modules are enable-based, proven at board level with the same A/B method.
