@@ -598,3 +598,17 @@ protect boundary leaves PR_DMA_RUN set (DMA engine stuck); the main-CPU PRG-RAM 
 shares PRG_RAM_* with the sub-CPU one without a PRG_RDY gate (race within ~0.3 us of SBRQ).
 Also in build 35: wave RAM reads acknowledged only after the SDRAM read completed; the
 sub-CPU address ring; font colour fix; Keep Running arming.
+
+## 2026-09-05 22:55 — hang root cause confirmed by the address ring (build 34)
+JP BIOS menu program (Kosinski block at ROM 0x13000, 11,314 bytes, loaded at PRG-RAM 0x6000):
+sub-CPU loop 60BE: bsr 61C8 (btst #7,($800E).w = main CPU command bit) / beq 60EE (idle:
+move.w 8C32,d0; jsr 60FC(pc,d0.w) = rts; bra 60BE). Every ring entry matches (stack at 5E78:
+bsr push / rts pop). The sub-CPU is in its normal wait-for-command loop while the main CPU
+(10EC-10F2, A1200E reads, data 0107) waits for the sub's answer with its command bit clear:
+a lost handshake step. Mechanism = the audited PRS_WRITE late DTACK: a posted stack write
+(bsr) immediately followed by the register read (btst FF800E) is exactly the sequence in
+which a late SDRAM acceptance made the write state's second DTACK terminate the register read
+with stale PRG-RAM data; a spurious bit 7 runs the command handler with no command pending
+and desynchronises the protocol. Kernel: Kosinski block at 0x16000 -> PRG-RAM 0 (21,466
+bytes). Tools: scratchpad/m68kdis.py (also /tmp/m68kdis.py on the MiSTer), /tmp/kos.py.
+Build 35 (fix) compiling as seeds 2 and 3.
