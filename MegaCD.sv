@@ -656,18 +656,34 @@ md_board md_board
 	.res_z80(res_z80)
 );
 
+// The board derives the work RAM write enable from R/W, the strobes and the VDP's bus arbitration
+// deep inside the chipset; it was the worst 107 MHz path in every fit since build 24 (RW ->
+// porta_we_reg, -1.9 to -6.2 ns) and a lost byte write to work RAM hangs the BIOS. The 68000 holds
+// address and data for several MCLK cycles around the strobe, so the write side goes through a
+// register stage and is performed one MCLK (9.3 ns) later on port B; reads keep the direct
+// address on port A. During md_reset port B runs the RAM clear sweep as before.
+reg [14:0] ram_68k_wa;
+reg [15:0] ram_68k_wd;
+reg  [1:0] ram_68k_wbe;
+reg        ram_68k_wwe;
+always @(posedge clk_md) begin
+	ram_68k_wa  <= ram_68k_address;
+	ram_68k_wd  <= ram_68k_data;
+	ram_68k_wbe <= ram_68k_byteena;
+	ram_68k_wwe <= ram_68k_wren;
+end
+
 dpram #(15,16) ram_68k
 (
 	.clock(clk_md),
 
 	.address_a(ram_68k_address),
-	.data_a(ram_68k_data),
-	.wren_a(ram_68k_wren),
-	.byteena_a(ram_68k_byteena),
 	.q_a(ram_68k_o),
 
-	.address_b(ram_rst_a),
-	.wren_b(md_reset)
+	.address_b(md_reset ? ram_rst_a : ram_68k_wa),
+	.data_b(md_reset ? 16'd0 : ram_68k_wd),
+	.byteena_b(md_reset ? 2'b11 : ram_68k_wbe),
+	.wren_b(md_reset | ram_68k_wwe)
 );
 
 dpram #(13,8) ram_z80k
