@@ -425,8 +425,10 @@ begin
 	RAM_DO <= DEC_DAT;
 	-- The CLK frequency follows the console region (53.69 MHz NTSC, 53.20 MHz PAL); the CD side is region
 	-- independent, so the frame length is chosen by PALSW to keep 75 Hz in both.
-	FRAME_END <= to_unsigned(709378, 20) when PALSW = '1' else to_unsigned(715908, 20);
-	FRAME_MID <= to_unsigned(283751, 20) when PALSW = '1' else to_unsigned(286363, 20);
+	-- Kept at the 53.69 MHz values in both regions (PALSW unused here): the sub-CPU clock scales with the
+	-- console clock as well (see MegaCD.sv, mcd_cegen), so the decoder frame keeps its ratio to the CPU.
+	FRAME_END <= to_unsigned(715908, 20);
+	FRAME_MID <= to_unsigned(286363, 20);
 	-- 75 Hz decoder frame timer: 53693175 / 75 = 715909 clocks per frame; the sector stream from the
 	-- drive (one sector per frame) resynchronises it, so real data and the free-running frame coincide.
 	process( RESET_N, CLK )

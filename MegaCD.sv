@@ -815,7 +815,9 @@ CEGen mcd_cegen
 (
 	.CLK(clk_sys),
 	.RST_N(~sys_reset),
-	.IN_CLK(PAL ? 53203423 : 53693175), // the Mega CD 50 MHz crystal is region independent: derive it from the actual clock
+	.IN_CLK(53693175),  // deliberately not region switched: with the PAL clock this gives 12.386 MHz, and the verificator's
+	                    // timing tests (VAR, IRQ 09, REG 8030), which pass on real PAL hardware, pass only with that ratio;
+	                    // an exact 12.5 MHz in PAL fails all three by 0.9% (build 30). The Mega CD side scales with the console.
 	.OUT_CLK(50000000),
 	.CE(mcd_en)
 );
