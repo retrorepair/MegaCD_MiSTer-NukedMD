@@ -431,3 +431,20 @@ telemetry freshness words (word 21 tag verified fresh on hardware), INT2 latency
 JP BIOS (blank disc, JP region, 60 Hz) on build 28: PCM sample_ce 520.8 kHz, ce_f 12.5 MHz,
 writes all seen, late_fetch 0, as on build 26. The seed spread (4.3 ns between seeds on the
 same netlist) means every future build needs a multi-seed fit before deploy.
+
+## 2026-09-05 18:20 — NTSC pops/warble and BIOS hangs: root cause and fix (build 30 compiling)
+Owner's observation: build 28 (a better fit of the same netlist) sounded better than 26 but
+with small pops, then the JP BIOS hung with both CPUs alive (main CPU in `tst.b $FFFE26 /
+bne` waiting for its VBlank handler's clear, which never read back as 0). The behaviour is
+fit dependent and NTSC only (clocks 1% faster than PAL), i.e. marginal timing, and it dates
+from build 18, which made the Nuked sub-CPU's bus outputs (address, data, /AS, /UDS, /LDS,
+R/W, FC) drive the gate array combinationally from the 107 MHz model clock into the 53.7 MHz
+domain. Fix (MC68K.vhd): register those outputs at MCLK. This adds 9.3 ns, lands in the same
+gate array CE_F sample as before, and the bench shows the fetch loop period unchanged and
+identical to FX68K (1340928 ps), interrupt timings within 10 ns. Also made region-proper:
+the 50 MHz CEGen takes the real clock (PAL 53.203 MHz) so the sub-CPU is 12.5 MHz in PAL
+too (was 12.386), and the CDC 75 Hz decoder frame timer takes the PAL clock (was 74.3 Hz).
+The remaining fit-dependent paths are in the main-side glue (md_board RW -> ram_68k write
+enable, VDP DMA control -> mcd_sel_n/mcd_uds_n) and are the next timing target.
+Build 29 (main tree, compiling) = PCM output capture on the OLD wrapper, kept as a baseline;
+build 30 = seeds 2 and 3 of the fixed sources (scratchpad seed2/ seed3/).
