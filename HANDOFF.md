@@ -583,3 +583,18 @@ main program spins without touching word RAM. The timer/INT3 logic is the origin
 Build 34 (compiling) records the sub-CPU's last 32 bus addresses to locate that loop.
 The state arrived on its own about two minutes after boot on build 33 (no Reset & Eject in
 the counters).
+
+## 2026-09-05 22:35 — PRG-RAM acknowledge audit: a real hazard, fixed (build 35)
+Independent audit of the sub-CPU PRG-RAM machine (ASIC.vhd PRSS): PRS_WRITE re-asserted
+S68K_PRGRAM_DTACK_N after the posted acknowledge had already been given in PRS_IDLE and
+released on strobe negation. When the SDRAM accepted the write late (refresh + other ports,
+up to ~300 ns) the CPU was already in its next bus cycle, which that DTACK terminated with
+S68K_PRGRAM_DO (the previous read's data) whatever its target (a PRG-RAM read never issued,
+word RAM, PCM, BRAM): random corruption a few times a minute, and the "0 ns AS->DTACK
+minimum" in the telemetry since build 21. Fix: PRS_WRITE no longer asserts DTACK. The audit
+found no hazard in the read-at-acceptance path (>= 28 ns margin), byte strobes or DMA
+ordering. Pre-existing (original core) issues noted, untouched: a DMA write below the write
+protect boundary leaves PR_DMA_RUN set (DMA engine stuck); the main-CPU PRG-RAM machine
+shares PRG_RAM_* with the sub-CPU one without a PRG_RDY gate (race within ~0.3 us of SBRQ).
+Also in build 35: wave RAM reads acknowledged only after the SDRAM read completed; the
+sub-CPU address ring; font colour fix; Keep Running arming.

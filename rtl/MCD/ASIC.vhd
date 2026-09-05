@@ -1492,9 +1492,11 @@ begin
 					when PRS_WRITE =>
 						PRG_RAM_WRL <= '0';
 						PRG_RAM_WRH <= '0';
-
-						S68K_PRGRAM_DTACK_N <= '0';
-						
+						-- No DTACK here: the CPU's write was acknowledged when it was posted (PRS_IDLE). Asserting it
+						-- again once the SDRAM has accepted the write, up to ~300 ns later under contention, landed
+						-- in the CPU's NEXT bus cycle and terminated it with S68K_PRGRAM_DO (the previous read's
+						-- data), whatever its target: random sub-CPU corruption a few times a minute, and the
+						-- "0 ns AS->DTACK" minimum seen in the telemetry since build 21.
 						PRSS <= PRS_END;
 						
 					when PRS_DMA_WAIT =>
