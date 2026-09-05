@@ -77,6 +77,8 @@ module mcd_debug
 	input             pcm_out_ce,   // PCM chip output sample updated (32552 Hz)
 	input      [15:0] pcm_l, pcm_r, // PCM chip output
 	input      [15:0] aud_l, aud_r, // mixed core audio (input of audio_fix)
+	input             cdd_send,     // gate array -> HPS: CDD command handed over (level, rising edge counts)
+	input             cdd_rec,      // HPS -> gate array: CDD status received (pulse)
 
 	// DDR3
 	output reg  [7:0] DDRAM_BURSTCNT,
@@ -251,9 +253,17 @@ end
 // updates while the verificator runs; win updates on any A12026 read after an INT2 trigger.
 reg  [1:0] ss_rnw;
 reg        ifl_cyc, irq_run;
+reg  [1:0] s_cdsend, s_cdrec;
+reg [15:0] cdd_send_cnt, cdd_rec_cnt;                                // CDD command / status handshakes with the HPS
+reg [22:0] sub_last_reg;                                            // A23..A1 of the sub-CPU's last gate array / PCM access
 reg [15:0] irq_t, irq_lat_last, irq_lat_max, win_last, win_min;
 always @(posedge clk) begin
 	ss_rnw <= {ss_rnw[0], s68k_rnw};
+	s_cdsend <= {s_cdsend[0], cdd_send};
+	s_cdrec  <= {s_cdrec[0], cdd_rec};
+	if(s_cdsend == 2'b01) cdd_send_cnt <= cdd_send_cnt + 1'd1;
+	if(s_cdrec == 2'b01) cdd_rec_cnt <= cdd_rec_cnt + 1'd1;
+	if(ss_as == 2'b10 && region_of == 3'd2) sub_last_reg <= s68k_a;
 	if(s_as == 2'b10) ifl_cyc <= ~exp_rw & (va == 23'h509000);          // main /AS fell on a write to A12000
 	if(~old_dl & rom_download) begin
 		irq_lat_last <= 0; irq_lat_max <= 0; win_last <= 0; win_min <= 16'hFFFF; irq_run <= 0;
@@ -350,8 +360,8 @@ always @(posedge clk) begin
 			18: DDRAM_DIN <= {smp_ce_cnt, cef_cnt};
 			19: DDRAM_DIN <= {pcm_wr_cnt, pcm_wr_seen_cnt};
 			20: DDRAM_DIN <= {pcm_late_cnt, 19'd0, cap_ptr};
-			21: DDRAM_DIN <= {seq, 32'hFEEDC0DE};                      // freshness check: must track word 1's seq
-			22: DDRAM_DIN <= {win_min, win_last, 24'd0, sp_ce, sp_late, sp_we, sp_cef}; // INT2 window + live PCM synchronizer samples
+			21: DDRAM_DIN <= {seq, cdd_send_cnt, cdd_rec_cnt};             // freshness (seq copy) + CDD handshake counters
+			22: DDRAM_DIN <= {win_min, win_last, 1'b0, sub_last_reg, sp_ce, sp_late, sp_we, sp_cef}; // INT2 window, last sub register address, live PCM synchronizer samples
 			23: DDRAM_DIN <= {ce_hi_cnt, irq_lat_max, irq_lat_last};
 			default: DDRAM_DIN <= trace[idx[3:0]];
 		endcase
