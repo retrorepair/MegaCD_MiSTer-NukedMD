@@ -422,3 +422,12 @@ is right; the warble scene still has to be measured (Final Fight's title uses li
 RW / VDP DMA control -> mcd_sel_n/mcd_uds_n (same families as builds 24-26, 3 ns worse).
 Not deployed. Seeds 2 and 3 of the same sources plus the INT2 telemetry (build 28 content)
 are compiling in the scratchpad seed2/ seed3/ copies.
+
+## Build 28 (2026-09-05 18:00) — seed 2 of the build 27 sources + INT2 telemetry; deployed
+Seeds of the same netlist: seed 1 (build 27) -6.15 @107 / -4.29 @53.7; seed 2 -1.84 @107
+(TNS -1024) / -0.32 @53.7, 37,543 ALMs; seed 3 -2.65 / -0.77. Seed 2 is on the card as
+MegaCD_TEST_NukedMD_20260904.rbf (md5 cf43dbbd) = build 28: Disc Insert Keep Running,
+telemetry freshness words (word 21 tag verified fresh on hardware), INT2 latency words.
+JP BIOS (blank disc, JP region, 60 Hz) on build 28: PCM sample_ce 520.8 kHz, ce_f 12.5 MHz,
+writes all seen, late_fetch 0, as on build 26. The seed spread (4.3 ns between seeds on the
+same netlist) means every future build needs a multi-seed fit before deploy.
