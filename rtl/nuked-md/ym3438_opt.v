@@ -1,0 +1,4987 @@
+/*
+ * ym3438_opt.v -- STAGE 2: ym3438_rtl with the collapsible ym_sr_bit master-slave
+ * pairs on the internal FM phase replaced by a single edge-triggered flip-flop,
+ * while the cells that a single FF CANNOT represent exactly are kept two-register.
+ * Output-exact to the die model: the A/B bench (sim/ym3438, +OPT) passes 200000
+ * MCLK cycles on both random seeds with 0 output mismatches, and the sr_out
+ * cell-level diagnostic (+SROUT) shows 0 internal divergences over the same runs.
+ *
+ * Provenance: the cell scaffolding was emitted by sim/ym3438/opt_gen.sh (which does
+ * the mechanical single-FF collapse of every ym_sr_bit); the per-cell KEEP=0/1
+ * classification below is then maintained HERE, in this file, which is the
+ * authoritative artifact validated by the bench and fitted by Quartus.  opt_gen.sh
+ * only produces the naive all-collapse starting point -- do NOT let it overwrite
+ * this file without re-applying the KEEP classification (see its header banner).
+ * The primitive cell definitions live in sim/ym3438/ym3438_opt_head.vh.
+ *
+ * A ym_sr_bit is a two-phase master-slave: v1 loads bit_in during c1, the slave v2
+ * loads v1 during c2, sr_out = v2[MSB].  c1/c2 are the non-overlapping internal FM
+ * phases (each high for several MCLK, with a dead phase between).  The die value is
+ * bit_in sampled at the LAST c1 edge; a single FF that captures at the c2 rising
+ * edge (c2r = c2 & ~c2_prev) instead samples bit_in at the FIRST c2 edge.
+ *
+ * RULE (parameter KEEP on every collapsible cell):
+ *   KEEP=0 (collapse, 1 FF/bit): EXACT iff bit_in is phase-stable across the c1..c2
+ *     window -- i.e. bit_in is another cell's registered v2/sr_out, or a pure
+ *     combinational function of such registered outputs.  These sample identically
+ *     at the last-c1 and first-c2 edges (non-blocking, pre-update).  This covers
+ *     every shift-register CHAIN and the whole op/eg/pg/ch/detune pipeline.
+ *   KEEP=1 (kept, 2 FF/bit, die-identical): REQUIRED where bit_in is combinational
+ *     AND phase-varying -- it can differ between the last-c1 edge and the first-c2
+ *     edge, so the single FF would latch the wrong value.  In this design the only
+ *     phase-varying sources are (a) nIC / IC (async reset; changes off-phase at
+ *     IC-release), (b) the CPU-bus write strobes/data (async), and (c) TEST_i
+ *     (async).  A one-slot error at IC-release on a FREE-RUNNING counter or a
+ *     rotating register-ring is permanent, so all such cells are kept.
+ *
+ * Cells kept two-register (KEEP=1), by reason:
+ *   - fsm cnt_low/cnt_high, reg_ctrl cnt_low/cnt_high, eg subcnt, io busy_cnt,
+ *     lfo lfo_subcnt_sr, eg eg_timer_sr, reg_ctrl timer_a/b counters : free-running
+ *     position/timers whose reset (nIC / fsm_sel23) is phase-varying at IC-release.
+ *   - the whole reg_ctrl register file (reg_data reg_sr, op_register sr1/sr2,
+ *     ch_register sr_0 [stage 0 only -- sr_1..5 are chains and collapse], fm_address,
+ *     fm_data, reg_a4/ac, reg_dac_msb, reg_27_timer_reset, kon_sr1..4) : recirculating
+ *     rings reset by nIC that must stay slot-aligned with the counter through IC-release.
+ *   - io write_a_sr/write_d_sr, reg_wr_ctrl reg_addr_sr : bit_in from async bus strobes.
+ *   - eg mask_bit_sr, eg state_sr1, eg timer_shift_sr[11] : bit_in carries nIC and/or
+ *     the async TEST_i path.
+ *   - the prescaler's ym_sr_bit cells (ym_sr_bit_kept): GENERATE c1/c2 on the PHI
+ *     phase, kept two-register so c1/c2 stay bit-identical to the die.
+ *
+ * NOT collapsed for other reasons (single register already, unchanged from _rtl):
+ *   - the transparent latches ym_dlatch_1/2, ym_slatch (already ONE register);
+ *   - the set/reset flip-flops ym_rs_trig, ym_rs_trig_sync.
+ */
+
+`default_nettype wire
+
+// ---- collapsed master-slave shift cell (single edge-triggered FF) ------------
+// KEEP=0: single-FF collapse (capture bit_in at the c2 rising edge, c2r).  Exact
+//   ONLY when bit_in is phase-stable across the c1..c2 window (a chain input, i.e.
+//   another cell's registered v2/sr_out, or a pure function of such).
+// KEEP=1: the die's genuine two-phase master-slave (v1<=bit_in at c1, v2<=v1 at
+//   c2).  REQUIRED for any cell whose bit_in is combinational-and-phase-varying --
+//   i.e. changes between the c1 sample and the c2 sample (reset/IC-release, the
+//   free-running FSM counters, and anything derived from them).  Bit-exact to die.
+module ym_sr_bit_opt #(parameter SR_LENGTH = 1, KEEP = 0)
+	(
+	input MCLK,
+	input c1,       // used only when KEEP=1 (master phase)
+	input c2,       // used only when KEEP=1 (slave phase)
+	input c2r,      // rising-edge-of-c2 capture pulse (shared per module); KEEP=0
+	input bit_in,
+	output sr_out
+	);
+
+	generate
+	if (KEEP) begin : g_kept
+		reg [SR_LENGTH-1:0] v1 = 0;
+		reg [SR_LENGTH-1:0] v2 = 0;
+		wire [SR_LENGTH-1:0] v2_assign = c2 ? v1 : v2;
+		assign sr_out = v2[SR_LENGTH-1];
+		always @(posedge MCLK)
+		begin
+			if (c1)
+			begin
+				if (SR_LENGTH == 1)
+					v1 <= bit_in;
+				else
+					v1 <= { v2[SR_LENGTH-2:0], bit_in };
+			end
+			v2 <= v2_assign;
+		end
+	end else begin : g_opt
+		reg [SR_LENGTH-1:0] q = 0;
+		assign sr_out = q[SR_LENGTH-1];
+		always @(posedge MCLK)
+			if (c2r)
+			begin
+				if (SR_LENGTH == 1)
+					q <= bit_in;
+				else
+					q <= { q[SR_LENGTH-2:0], bit_in };
+			end
+	end
+	endgenerate
+endmodule
+
+// ---- kept (two-register) shift cell: used ONLY by the prescaler --------------
+module ym_sr_bit_kept #(parameter SR_LENGTH = 1)
+	(
+	input MCLK,
+	input c1,
+	input c2,
+	input bit_in,
+	output sr_out
+	);
+
+	reg [SR_LENGTH-1:0] v1 = 0;
+	reg [SR_LENGTH-1:0] v2 = 0;
+
+	wire [SR_LENGTH-1:0] v2_assign = c2 ? v1 : v2;
+
+	assign sr_out = v2[SR_LENGTH-1];
+
+	always @(posedge MCLK)
+	begin
+		if (c1)
+		begin
+			if (SR_LENGTH == 1)
+				v1 <= bit_in;
+			else
+				v1 <= { v2[SR_LENGTH-2:0], bit_in };
+		end
+		v2 <= v2_assign;
+	end
+endmodule
+
+module ym_sr_bit_array_opt #(parameter SR_LENGTH = 1, DATA_WIDTH = 1, KEEP = 0)
+	(
+	input MCLK,
+	input c1,
+	input c2,
+	input c2r,
+	input [DATA_WIDTH-1:0] data_in,
+	output [DATA_WIDTH-1:0] data_out
+	);
+
+	wire out[0:DATA_WIDTH-1];
+
+	generate
+		genvar i;
+		for (i = 0; i < DATA_WIDTH; i = i + 1)
+		begin : l1
+			ym_sr_bit_opt #(.SR_LENGTH(SR_LENGTH), .KEEP(KEEP)) sr (
+			.MCLK(MCLK), .c1(c1), .c2(c2), .c2r(c2r),
+			.bit_in(data_in[i]), .sr_out(out[i]) );
+			assign data_out[i] = out[i];
+		end
+	endgenerate
+endmodule
+
+module ym_cnt_bit_opt #(parameter DATA_WIDTH = 1, KEEP = 0)
+	(
+	input MCLK, input c1, input c2, input c2r,
+	input c_in, input reset,
+	output [DATA_WIDTH-1:0] val, output c_out
+	);
+	wire [DATA_WIDTH-1:0] data_in;
+	wire [DATA_WIDTH-1:0] data_out;
+	wire [DATA_WIDTH:0] sum;
+	ym_sr_bit_array_opt #(.DATA_WIDTH(DATA_WIDTH), .KEEP(KEEP)) mem
+		( .MCLK(MCLK), .c1(c1), .c2(c2), .c2r(c2r), .data_in(data_in), .data_out(data_out) );
+	assign sum = { 1'h0, data_out } + {{DATA_WIDTH{1'h0}}, c_in};
+	assign val = data_out;
+	assign data_in = reset ? {DATA_WIDTH{1'h0}} : sum[DATA_WIDTH-1:0];
+	assign c_out = sum[DATA_WIDTH];
+endmodule
+
+module ym_cnt_bit_load_opt #(parameter DATA_WIDTH = 1, KEEP = 0)
+	(
+	input MCLK, input c1, input c2, input c2r,
+	input c_in, input reset, input load, input [DATA_WIDTH-1:0] load_val,
+	output [DATA_WIDTH-1:0] val, output c_out
+	);
+	wire [DATA_WIDTH-1:0] data_in;
+	wire [DATA_WIDTH-1:0] data_out;
+	wire [DATA_WIDTH:0] sum;
+	ym_sr_bit_array_opt #(.DATA_WIDTH(DATA_WIDTH), .KEEP(KEEP)) mem
+		( .MCLK(MCLK), .c1(c1), .c2(c2), .c2r(c2r), .data_in(data_in), .data_out(data_out) );
+	wire [DATA_WIDTH-1:0] base_val = load ? load_val : data_out;
+	assign sum = {1'h0, base_val} + {{DATA_WIDTH{1'h0}},c_in};
+	assign data_in = reset ? {DATA_WIDTH{1'h0}} : sum[DATA_WIDTH-1:0];
+	assign val = data_out;
+	assign c_out = sum[DATA_WIDTH];
+endmodule
+
+module ym_dbg_read_opt #(parameter DATA_WIDTH = 1, KEEP = 0)
+	(
+	input MCLK, input c1, input c2, input c2r,
+	input prev, input load, input [DATA_WIDTH-1:0] load_val, output next
+	);
+	wire [DATA_WIDTH-1:0] data_in;
+	wire [DATA_WIDTH-1:0] data_out;
+	ym_sr_bit_array_opt #(.DATA_WIDTH(DATA_WIDTH), .KEEP(KEEP)) mem
+		( .MCLK(MCLK), .c1(c1), .c2(c2), .c2r(c2r), .data_in(data_in), .data_out(data_out) );
+	wire [DATA_WIDTH-1:0] chain;
+	assign data_in = chain | (load ? load_val : {DATA_WIDTH{1'h0}});
+	generate
+		if (DATA_WIDTH == 1) assign chain = prev;
+		else assign chain = { prev, data_out[DATA_WIDTH-1:1] };
+	endgenerate
+	assign next = data_out[0];
+endmodule
+
+module ym_dbg_read_eg_opt #(parameter DATA_WIDTH = 1, KEEP = 0)
+	(
+	input MCLK, input c1, input c2, input c2r,
+	input prev, input load, input [DATA_WIDTH-1:0] load_val, output next
+	);
+	wire [DATA_WIDTH-1:0] data_in;
+	wire [DATA_WIDTH-1:0] data_out;
+	ym_sr_bit_array_opt #(.DATA_WIDTH(DATA_WIDTH), .KEEP(KEEP)) mem
+		( .MCLK(MCLK), .c1(c1), .c2(c2), .c2r(c2r), .data_in(data_in), .data_out(data_out) );
+	wire [DATA_WIDTH-1:0] chain;
+	assign data_in = chain | (load ? load_val : {DATA_WIDTH{1'h0}});
+	generate
+		if (DATA_WIDTH == 1) assign chain = prev;
+		else assign chain = { data_out[DATA_WIDTH-2:0], prev };
+	endgenerate
+	assign next = data_out[DATA_WIDTH-1];
+endmodule
+
+// ---- unchanged single-register cells (renamed _opt) --------------------------
+module ym_dlatch_1_opt #(parameter DATA_WIDTH = 1)
+	( input MCLK, input c1, input [DATA_WIDTH-1:0] inp, output [DATA_WIDTH-1:0] val, output [DATA_WIDTH-1:0] nval );
+	reg [DATA_WIDTH-1:0] mem = {DATA_WIDTH{1'h0}};
+	always @(posedge MCLK) if (c1) mem <= inp;
+	assign val = mem;
+	assign nval = ~mem;
+endmodule
+
+// ym_dlatch_2 carries an (ignored) c2r port so the blanket ".c2(c2)->,.c2r(c2r)"
+// instantiation rewrite is uniform; the latch still uses c2, not c2r.
+module ym_dlatch_2_opt #(parameter DATA_WIDTH = 1)
+	( input MCLK, input c2, input c2r, input [DATA_WIDTH-1:0] inp, output [DATA_WIDTH-1:0] val, output [DATA_WIDTH-1:0] nval );
+	reg [DATA_WIDTH-1:0] mem = {DATA_WIDTH{1'h0}};
+	always @(posedge MCLK) if (c2) mem <= inp;
+	assign val = mem;
+	assign nval = ~mem;
+endmodule
+
+module ym_edge_detect_opt
+	( input MCLK, input c1, input inp, output outp );
+	wire prev_out;
+	ym_dlatch_1_opt prev ( .MCLK(MCLK), .c1(c1), .inp(inp), .val(prev_out), .nval() );
+	assign outp = ~(prev_out | ~inp);
+endmodule
+
+module ym_slatch_opt #(parameter DATA_WIDTH = 1)
+	( input MCLK, input en, input [DATA_WIDTH-1:0] inp, output [DATA_WIDTH-1:0] val, output [DATA_WIDTH-1:0] nval );
+	reg [DATA_WIDTH-1:0] mem = {DATA_WIDTH{1'h0}};
+	always @(posedge MCLK) if (en) mem <= inp;
+	assign val = mem;
+	assign nval = ~mem;
+endmodule
+
+module ym_rs_trig_opt
+	( input MCLK, input set, input rst, output reg q = 1'h0, output reg nq = 1'h1 );
+	always @(posedge MCLK) begin
+		q <= rst ? 1'h0 : (set ? 1'h1 : q);
+		nq <= set ? 1'h0 : (rst ? 1'h1 : ~q);
+	end
+endmodule
+
+module ym_rs_trig_sync_opt
+	( input MCLK, input set, input rst, input c1, output reg q = 1'h0, output reg nq = 1'h1 );
+	always @(posedge MCLK) begin
+		q <= (c1 & rst) ? 1'h0 : ((c1 & set) ? 1'h1 : q);
+		nq <= (c1 & set) ? 1'h0 : ((c1 & rst) ? 1'h1 : ~q);
+	end
+endmodule
+
+// ==== from ym3438_prescaler.v (kept two-register) ====
+module ym3438_prescaler_opt(
+	input MCLK,
+	input PHI,
+	input IC,
+	output c1, c2,
+	output reset_fsm
+	);
+	
+	
+	wire nIC = ~IC;
+	
+	wire pc1 = ~PHI;
+	wire pc2 = PHI;
+	
+	wire ic_latch_out;
+	
+	ym_sr_bit_kept #(.SR_LENGTH(12)) ic_latch(
+		.MCLK(MCLK),
+		.bit_in(nIC),
+		.sr_out(ic_latch_out),
+		.c1(pc1),
+		.c2(pc2)
+		);
+	
+	wire fsm_reset_and = nIC & ~ic_latch_out;
+	
+	wire fsm_res_latch_out;
+	
+	ym_sr_bit_kept #(.SR_LENGTH(4)) fsm_res_latch(
+		.MCLK(MCLK),
+		.bit_in(fsm_reset_and),
+		.sr_out(fsm_res_latch_out),
+		.c1(pc1),
+		.c2(pc2)
+		);
+	
+	assign reset_fsm = fsm_res_latch_out;
+	
+	wire [5:0] clkgen_sr_in;
+	wire [5:0] clkgen_sr_out;
+
+	genvar i;
+	
+	generate
+		for (i = 0; i < 6; i=i+1)
+		begin : l1
+	
+			ym_sr_bit_kept clkgen_sr(
+				.MCLK(MCLK),
+				.bit_in(clkgen_sr_in[i]),
+				.sr_out(clkgen_sr_out[i]),
+				.c1(pc1),
+				.c2(pc2)
+				);
+			if (i != 0)
+				assign clkgen_sr_in[i] = clkgen_sr_out[i-1];
+		end
+	endgenerate
+	
+	wire clkgen_bit = ~(fsm_reset_and | (clkgen_sr_out[4:0] != 4'b0));
+	
+	assign clkgen_sr_in[0] = clkgen_bit;
+	
+	wire c1_in = clkgen_sr_out[0] | clkgen_sr_out[5];
+	wire c2_in = clkgen_sr_out[2] | clkgen_sr_out[3];
+	
+	ym_sr_bit_kept c1_sr(
+		.MCLK(MCLK),
+		.bit_in(c1_in),
+		.sr_out(c1),
+		.c1(pc1),
+		.c2(pc2)
+		);
+	
+	ym_sr_bit_kept c2_sr(
+		.MCLK(MCLK),
+		.bit_in(c2_in),
+		.sr_out(c2),
+		.c1(pc1),
+		.c2(pc2)
+		);
+
+endmodule
+
+// ==== from ym3438_fsm.v ====
+module ym3438_fsm_opt
+	(
+	input MCLK,
+	input c1,
+	input c2,
+	input fsm_reset,
+	input [2:0] connect,
+	output fsm_sel0_o,
+	output fsm_sel1_o,
+	output fsm_sel2_o,
+	output fsm_sel23_o,
+	output fsm_timer_ed_o,
+	output fsm_op1_sel_o,
+	output fsm_op2_sel_o,
+	output fsm_ch3_sel_o,
+	output alg_fb_sel_o,
+	output alg_op2_o,
+	output alg_cur1_o,
+	output alg_cur2_o,
+	output alg_op1_0_o,
+	output alg_out_o,
+	output fsm_dac_load,
+	output fsm_dac_out_sel,
+	output fsm_dac_ch6
+	);
+
+	// STAGE 2: shared rising-edge-of-c2 capture pulse for collapsed cells
+	reg c2_prev = 1'h0;
+	wire c2r = c2 & ~c2_prev;
+	always @(posedge MCLK) c2_prev <= c2;
+	
+	wire [1:0] cnt_low_out;
+	wire [2:0] cnt_high_out;
+	
+	wire [4:0] fsm_cnt;
+	
+	wire reset_low_cnt = fsm_reset | cnt_low_out[1];
+	
+	// KEEP=1: free-running FSM position counter.  Its reset (fsm_reset, and the
+	// c_in of cnt_high) is phase-varying at IC-release; a single-FF collapse would
+	// latch it one phase late, permanently offsetting the free-running counter and
+	// desyncing the whole chip.  Kept two-register so it is bit-exact to the die.
+	ym_cnt_bit_opt #(.DATA_WIDTH(2), .KEEP(1)) cnt_low
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.c_in(1'h1),
+		.reset(reset_low_cnt),
+		.val(cnt_low_out),
+		.c_out()
+		);
+
+	ym_cnt_bit_opt #(.DATA_WIDTH(3), .KEEP(1)) cnt_high
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.c_in(cnt_low_out[1]),
+		.reset(fsm_reset),
+		.val(cnt_high_out),
+		.c_out()
+		);
+		
+	assign fsm_cnt = { cnt_high_out, cnt_low_out };
+	
+	wire [23:0] fsm_sel;
+	
+	genvar i, j;
+		
+	generate
+		for (i = 0; i < 8; i=i+1)
+		begin : l1
+			for (j = 0; j < 3; j=j+1)
+			begin : l2
+				assign fsm_sel[i*3+j] = (cnt_high_out == i) & (cnt_low_out == j);
+			end
+		end
+	endgenerate
+	
+	wire fsm_sel0 = fsm_sel[0];
+	wire fsm_op4_sel = fsm_sel[0] | fsm_sel[1] | fsm_sel[2] | fsm_sel[3] | fsm_sel[4] | fsm_sel[5];
+	wire fsm_op1_sel = fsm_sel[6] | fsm_sel[7] | fsm_sel[8] | fsm_sel[9] | fsm_sel[10] | fsm_sel[11];
+	wire fsm_op3_sel = fsm_sel[12] | fsm_sel[13] | fsm_sel[14] | fsm_sel[15] | fsm_sel[16] | fsm_sel[17];
+	wire fsm_op2_sel = fsm_sel[18] | fsm_sel[19] | fsm_sel[20] | fsm_sel[21] | fsm_sel[22] | fsm_sel[23];
+	wire fsm_sel2 = fsm_sel[2];
+	wire fsm_sel23 = fsm_sel[23];
+	wire fsm_ch3_sel = fsm_sel[2] | fsm_sel[8] | fsm_sel[14] | fsm_sel[20];
+	assign fsm_dac_load = fsm_sel[0] | fsm_sel[4] | fsm_sel[8] | fsm_sel[12] | fsm_sel[16] | fsm_sel[20];
+	assign fsm_dac_out_sel = fsm_sel[12] | fsm_sel[13] | fsm_sel[14] | fsm_sel[15] | fsm_sel[16] | fsm_sel[17]
+							| fsm_sel[18] | fsm_sel[19] | fsm_sel[20] | fsm_sel[21] | fsm_sel[22] | fsm_sel[23];
+	assign fsm_dac_ch6 = fsm_sel[4] | fsm_sel[5] | fsm_sel[6] | fsm_sel[7];
+	wire fsm_sel1 = fsm_sel[1];
+	
+	wire fsm_timer_ed;
+	
+	ym_edge_detect_opt ed
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(fsm_sel[2]),
+		.outp(fsm_timer_ed)
+		);
+	
+	wire alg_fb_sel_sr_out;
+	wire alg_fb_sel = ~alg_fb_sel_sr_out;
+		
+	ym_sr_bit_opt alg_fb_sel_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(fsm_op2_sel),
+		.sr_out(alg_fb_sel_sr_out)
+		);
+
+	wire [7:0] alg_sel;
+	
+	generate
+		for (i = 0; i < 8; i=i+1)
+		begin : l3
+			assign alg_sel[i] = connect == i;
+		end
+	endgenerate
+	
+	wire alg_567 = alg_sel[5] | alg_sel[6] | alg_sel[7];
+	wire alg_4567 = alg_sel[4] | alg_sel[5] | alg_sel[6] | alg_sel[7];
+	wire alg_25 = alg_sel[2] | alg_sel[5];
+	wire alg_15 = alg_sel[1] | alg_sel[5];
+	wire alg_03456 = alg_sel[0] | alg_sel[3] | alg_sel[4] | alg_sel[5] | alg_sel[6];
+	wire alg_0134 = alg_sel[0] | alg_sel[1] | alg_sel[3] | alg_sel[4];
+	wire alg_012 = alg_sel[0] | alg_sel[1] | alg_sel[2];
+	
+	wire alg_op2 = (fsm_op4_sel & alg_012) | (fsm_op3_sel & alg_sel[3]);
+	wire alg_cur1 = (fsm_op3_sel & alg_sel[2]);
+	wire alg_cur2 = (fsm_op1_sel & alg_03456) | (fsm_op3_sel & alg_0134);
+	wire alg_op1_0 = (fsm_op4_sel & alg_15) | (fsm_op3_sel & alg_25) | fsm_op2_sel;
+	wire alg_out = (fsm_op1_sel & alg_sel[7]) | (fsm_op3_sel & alg_567) | (fsm_op2_sel & alg_4567) | fsm_op4_sel;
+	
+	assign fsm_sel0_o = fsm_sel0;
+	assign fsm_sel1_o = fsm_sel1;
+	assign fsm_sel2_o = fsm_sel2;
+	assign fsm_sel23_o = fsm_sel23;
+	assign fsm_timer_ed_o = fsm_timer_ed;
+	assign fsm_op1_sel_o = fsm_op1_sel;
+	assign fsm_op2_sel_o = fsm_op2_sel;
+	assign fsm_ch3_sel_o = fsm_ch3_sel;
+	assign alg_fb_sel_o = alg_fb_sel;
+	assign alg_op2_o = alg_op2;
+	assign alg_cur1_o = alg_cur1;
+	assign alg_cur2_o = alg_cur2;
+	assign alg_op1_0_o = alg_op1_0;
+	assign alg_out_o = alg_out;
+	
+endmodule
+
+// ==== from ym3438_io.v ====
+module ym3438_io_opt
+	(
+	input MCLK,
+	input c1,
+	input c2,
+	input [1:0] address,
+	input [7:0] data,
+	input CS,
+	input WR,
+	input RD,
+	input IC,
+	input timer_a,
+	input timer_b,
+	input [7:0] reg_21,
+	input [7:3] reg_2c,
+	input pg_dbg,
+	input eg_dbg,
+	input eg_dbg_inc,
+	input [13:0] op_dbg,
+	input [8:0] ch_dbg,
+	output write_addr_en,
+	output write_data_en,
+	output [7:0] data_bus,
+	output bank,
+	output [7:0] data_o,
+	output io_dir,
+	output irq,
+	input ym2612_status_enable
+	);
+
+	// STAGE 2: shared rising-edge-of-c2 capture pulse for collapsed cells
+	reg c2_prev = 1'h0;
+	wire c2r = c2 & ~c2_prev;
+	always @(posedge MCLK) c2_prev <= c2;
+	
+	
+	wire read_en = (~RD & IC & ~CS) & (~ym2612_status_enable | address == 2'h0);
+	wire write_addr = (~WR & ~CS & ~address[0]) | ~IC;
+	wire write_data = ~WR & ~CS & address[0] & IC;
+	
+	wire io_IC = IC;
+	
+	wire write_a_tr1_q, write_a_tr1_nq;
+	
+	wire write_a_sig;
+	
+	ym_rs_trig_opt write_a_tr1
+		(
+		.MCLK(MCLK),
+		.set(write_addr),
+		.rst(write_a_sig),
+		.q(write_a_tr1_q),
+		.nq(write_a_tr1_nq)
+		);
+	
+	wire write_a_tr2_q;
+	
+	ym_rs_trig_sync_opt write_a_tr2
+		(
+		.MCLK(MCLK),
+		.set(write_a_tr1_q),
+		.rst(write_a_tr1_nq),
+		.c1(c1),
+		.q(write_a_tr2_q),
+		.nq()
+		);
+	
+	ym_slatch_opt write_a_sl
+		(
+		.MCLK(MCLK),
+		.en(c2),
+		.inp(write_a_tr2_q),
+		.val(write_a_sig),
+		.nval()
+		);
+	
+	wire write_a_sig_delay;
+	
+	ym_sr_bit_opt #(.KEEP(1)) write_a_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(write_a_sig),
+		.sr_out(write_a_sig_delay)
+		);
+	
+	assign write_addr_en = write_a_sig & ~write_a_sig_delay;
+	
+	wire write_d_tr1_q, write_d_tr1_nq;
+	
+	wire write_d_sig;
+	
+	ym_rs_trig_opt write_d_tr1
+		(
+		.MCLK(MCLK),
+		.set(write_data),
+		.rst(write_d_sig),
+		.q(write_d_tr1_q),
+		.nq(write_d_tr1_nq)
+		);
+	
+	wire write_d_tr2_q;
+	
+	ym_rs_trig_sync_opt write_d_tr2
+		(
+		.MCLK(MCLK),
+		.set(write_d_tr1_q),
+		.rst(write_d_tr1_nq),
+		.c1(c1),
+		.q(write_d_tr2_q),
+		.nq()
+		);
+	
+	ym_slatch_opt write_d_sl
+		(
+		.MCLK(MCLK),
+		.en(c2),
+		.inp(write_d_tr2_q),
+		.val(write_d_sig),
+		.nval()
+		);
+		
+	wire write_d_sig_delay;
+	
+	ym_sr_bit_opt #(.KEEP(1)) write_d_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(write_d_sig),
+		.sr_out(write_d_sig_delay)
+		);
+	
+	assign write_data_en = write_d_sig & ~write_d_sig_delay;
+	
+	wire [8:0] data_l_out;
+	wire [8:0] data_in = { address[1], data };
+	wire data_l_en = ~WR & ~CS;
+	
+	ym_slatch_opt data_l[0:8]
+		(
+		.MCLK(MCLK),
+		.en(data_l_en),
+		.inp(data_in),
+		.val(data_l_out),
+		.nval()
+		);
+	
+	wire busy_of;
+	
+	wire busy_state_o;
+	
+	ym_cnt_bit_opt #(.DATA_WIDTH(5), .KEEP(1)) busy_cnt
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.c_in(~busy_state_o),
+		.reset(~io_IC),
+		.val(),
+		.c_out(busy_of)
+		);
+	
+	wire busy_state_i = ~(write_data_en | (~busy_state_o & ~(busy_of | ~io_IC)));
+	
+	ym_sr_bit_opt #(.KEEP(1)) busy_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(busy_state_i),
+		.sr_out(busy_state_o)
+		);
+	
+	assign io_dir = ~(IC & ~RD & ~CS);
+	
+	assign data_bus = (io_dir & IC) ? data_l_out[7:0] : 8'h00; // tristate + pull down
+
+	assign bank = data_l_out[8];
+	
+	wire read_status = ~reg_21[6] & read_en;
+	wire read_debug = reg_21[6] & read_en;
+	
+	wire timer_a_status_sl_out;
+	
+	ym_slatch_opt timer_a_status_sl
+		(
+		.MCLK(MCLK),
+		.en(~read_en),
+		.inp(timer_a),
+		.val(),
+		.nval(timer_a_status_sl_out)
+		);
+	
+	wire timer_b_status_sl_out;
+	
+	ym_slatch_opt timer_b_status_sl
+		(
+		.MCLK(MCLK),
+		.en(~read_en),
+		.inp(timer_b),
+		.val(),
+		.nval(timer_b_status_sl_out)
+		);
+	
+		wire [7:0] debug_data;
+	wire [15:0] debug_data_w;
+	wire [6:0] debug_data1_1;
+	wire [6:0] debug_data1_2;
+
+	reg [7:0] data_o_r;
+	reg [25:0] status_time;
+	
+	always @(posedge MCLK)
+	begin
+		if (read_status)
+			data_o_r <= { ~busy_state_o, 5'h0, timer_b_status_sl_out, timer_a_status_sl_out };
+		if (read_debug)
+			data_o_r <= debug_data;
+
+		if (read_status | read_debug)
+			status_time <= 26'd40000000;
+		else if (status_time)
+			status_time <= status_time - 1;
+		else
+			data_o_r <= 8'h0;
+	end
+	assign data_o = data_o_r;
+	
+	assign irq = ~(timer_a_status_sl_out | timer_b_status_sl_out);
+	
+	
+	assign debug_data = reg_21[7] ? debug_data_w[15:8] : debug_data_w[7:0];
+	
+	wire [8:0] ch_dbg_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(9)) ch_dbg_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(ch_dbg),
+		.data_out(ch_dbg_sr_o)
+		);
+	
+	assign debug_data_w[15] = pg_dbg;
+	assign debug_data_w[14] = reg_21[0] ? eg_dbg : eg_dbg_inc;
+	assign debug_data_w[13:0] = reg_2c[4] ? { 5'h0, ch_dbg_sr_o } : op_dbg;
+
+endmodule
+
+// ==== from ym3438_regs.v ====
+module ym3438_reg_ctrl_opt
+	(
+	input MCLK,
+	input c1,
+	input c2,
+	input [7:0] data,
+	input bank,
+	input write_addr_en,
+	input write_data_en,
+	input IC,
+	input fsm_sel_23,
+	input fsm_sel_1,
+	input timer_ed,
+	input ch3_sel,
+	input [1:0] rate_sel,
+	input fsm_dac_load,
+	input fsm_dac_out_sel,
+	output [3:0] multi,
+	output [2:0] dt,
+	output [6:0] tl,
+	output [1:0] ks,
+	output [4:0] sl,
+	output ssg_enable,
+	output ssg_inv,
+	output ssg_repeat,
+	output ssg_holdup,
+	output ssg_type0,
+	output ssg_type2,
+	output ssg_type3,
+	output [4:0] rate,
+	output [10:0] fnum,
+	output [2:0] block,
+	output [1:0] note,
+	output [2:0] connect,
+	output [2:0] fb,
+	output [2:0] pms,
+	output [1:0] ams,
+	output [1:0] pan_o,
+	output [7:0] reg_21,
+	output [3:0] lfo,
+	output [7:0] dac,
+	output dac_en,
+	output [7:3] reg_2c,
+	output kon,
+	output kon_csm,
+	output mode_csm,
+	output timer_a_status,
+	output timer_b_status,
+	output [2:0] dac_index
+	);
+
+	// STAGE 2: shared rising-edge-of-c2 capture pulse for collapsed cells
+	reg c2_prev = 1'h0;
+	wire c2r = c2 & ~c2_prev;
+	always @(posedge MCLK) c2_prev <= c2;
+	
+	wire fm_addr_write = (data[7:4] != 0) & write_addr_en;
+	
+	wire fm_addr_sr_o;
+	
+	ym_sr_bit_opt #(.KEEP(1)) fm_addr_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(~((~write_addr_en & ~fm_addr_sr_o) | fm_addr_write)),
+		.sr_out(fm_addr_sr_o)
+		);
+	
+	wire fm_data_write = ~fm_addr_sr_o & write_data_en;
+	
+	wire fm_data_sr_o2;
+	wire fm_data_sr_o = ~fm_data_sr_o2;
+	
+	ym_sr_bit_opt #(.KEEP(1)) fm_data_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(~((~write_addr_en & fm_data_sr_o) | fm_data_write)),
+		.sr_out(fm_data_sr_o2)
+		);
+		
+	wire nIC = ~IC;
+	
+	wire [8:0] fm_address_in;
+	wire [8:0] fm_address_out;
+	
+	assign fm_address_in = nIC ? 9'h000 : (fm_addr_write ? { bank, data } : fm_address_out); 
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(9), .KEEP(1)) fm_address
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(fm_address_in),
+		.data_out(fm_address_out)
+		);
+	
+	wire [7:0] fm_data_in;
+	wire [7:0] fm_data_out;
+	
+	assign fm_data_in = nIC ? 8'h00 : (fm_data_write ? data : fm_data_out); 
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(8), .KEEP(1)) fm_data
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(fm_data_in),
+		.data_out(fm_data_out)
+		);
+	
+	wire [1:0] cnt_low_out;
+	wire [2:0] cnt_high_out;
+	
+	wire [4:0] reg_cnt = { cnt_high_out, cnt_low_out };
+	
+	wire cnt_reset = nIC | fsm_sel_23;
+	
+	wire reset_low_cnt = cnt_reset | cnt_low_out[1];
+	
+	ym_cnt_bit_opt #(.DATA_WIDTH(2), .KEEP(1)) cnt_low
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.c_in(1'h1),
+		.reset(reset_low_cnt),
+		.val(cnt_low_out),
+		.c_out()
+		);
+	
+	ym_cnt_bit_opt #(.DATA_WIDTH(3), .KEEP(1)) cnt_high
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.c_in(cnt_low_out[1]),
+		.reset(cnt_reset),
+		.val(cnt_high_out),
+		.c_out()
+		);
+
+	wire ch_match = ~((reg_cnt[0] ^ fm_address_out[0]) | (reg_cnt[1] ^ fm_address_out[1]) | (reg_cnt[2] ^ fm_address_out[8]));
+	
+	wire ch_write = ch_match & fm_data_sr_o;
+	
+	wire ch_writeA0 = ch_write & (fm_address_out[7:2] == 6'h28);
+	wire ch_writeA4 = ch_write & (fm_address_out[7:2] == 6'h29);
+	wire ch_writeA8 = ch_write & (fm_address_out[7:2] == 6'h2a);
+	wire ch_writeAC = ch_write & (fm_address_out[7:2] == 6'h2b);
+	wire ch_writeB0 = ch_write & (fm_address_out[7:2] == 6'h2c);
+	wire ch_writeB4 = ch_write & (fm_address_out[7:2] == 6'h2d);
+	
+	wire op_match = ~((reg_cnt[0] ^ fm_address_out[0]) | (reg_cnt[1] ^ fm_address_out[1]) | (reg_cnt[3] ^ fm_address_out[2]) | (reg_cnt[2] ^ fm_address_out[8]));
+	
+	wire op_write = op_match & fm_data_sr_o;
+	
+	wire op_write30 = op_write & (fm_address_out[7:4] == 4'h3);
+	wire op_write40 = op_write & (fm_address_out[7:4] == 4'h4);
+	wire op_write50 = op_write & (fm_address_out[7:4] == 4'h5);
+	wire op_write60 = op_write & (fm_address_out[7:4] == 4'h6);
+	wire op_write70 = op_write & (fm_address_out[7:4] == 4'h7);
+	wire op_write80 = op_write & (fm_address_out[7:4] == 4'h8);
+	wire op_write90 = op_write & (fm_address_out[7:4] == 4'h9);
+	
+	wire [3:0] reg_multi_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(4), .SR_LENGTH(2)) reg_multi_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(reg_multi_o),
+		.data_out(multi)
+		);
+	
+	ym3438_op_register_opt #(.DATA_WIDTH(4), .KEEP(1)) reg_multi
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(fm_data_out[3:0]),
+		.write_en(op_write30),
+		.rst(nIC),
+		.bank(fm_address_out[3]),
+		.obank(reg_cnt[4]),
+		.data_o(reg_multi_o)
+		);
+	
+	ym3438_op_register_opt #(.DATA_WIDTH(3), .KEEP(1)) reg_dt
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(fm_data_out[6:4]),
+		.write_en(op_write30),
+		.rst(nIC),
+		.bank(fm_address_out[3]),
+		.obank(reg_cnt[4]),
+		.data_o(dt)
+		);
+	
+	ym3438_op_register_opt #(.DATA_WIDTH(7), .KEEP(1)) reg_tl
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(fm_data_out[6:0]),
+		.write_en(op_write40),
+		.rst(nIC),
+		.bank(fm_address_out[3]),
+		.obank(reg_cnt[4]),
+		.data_o(tl)
+		);
+		
+	wire [4:0] ar;
+	
+	ym3438_op_register_opt #(.DATA_WIDTH(5), .KEEP(1)) reg_ar
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(fm_data_out[4:0]),
+		.write_en(op_write50),
+		.rst(nIC),
+		.bank(fm_address_out[3]),
+		.obank(reg_cnt[4]),
+		.data_o(ar)
+		);
+	
+	ym3438_op_register_opt #(.DATA_WIDTH(2), .KEEP(1)) reg_ks
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(fm_data_out[7:6]),
+		.write_en(op_write50),
+		.rst(nIC),
+		.bank(fm_address_out[3]),
+		.obank(reg_cnt[4]),
+		.data_o(ks)
+		);
+		
+	wire [4:0] dr;
+	
+	ym3438_op_register_opt #(.DATA_WIDTH(5), .KEEP(1)) reg_dr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(fm_data_out[4:0]),
+		.write_en(op_write60),
+		.rst(nIC),
+		.bank(fm_address_out[3]),
+		.obank(reg_cnt[4]),
+		.data_o(dr)
+		);
+		
+	wire am;
+	
+	ym3438_op_register_opt #(.DATA_WIDTH(1), .KEEP(1)) reg_am
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(fm_data_out[7:7]),
+		.write_en(op_write60),
+		.rst(nIC),
+		.bank(fm_address_out[3]),
+		.obank(reg_cnt[4]),
+		.data_o(am)
+		);
+		
+	wire [4:0] sr;
+	
+	ym3438_op_register_opt #(.DATA_WIDTH(5), .KEEP(1)) reg_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(fm_data_out[4:0]),
+		.write_en(op_write70),
+		.rst(nIC),
+		.bank(fm_address_out[3]),
+		.obank(reg_cnt[4]),
+		.data_o(sr)
+		);
+		
+	wire [3:0] rr;
+	
+	ym3438_op_register_opt #(.DATA_WIDTH(4), .KEEP(1)) reg_rr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(fm_data_out[3:0]),
+		.write_en(op_write80),
+		.rst(nIC),
+		.bank(fm_address_out[3]),
+		.obank(reg_cnt[4]),
+		.data_o(rr)
+		);
+	
+	ym3438_op_register_opt #(.DATA_WIDTH(4), .KEEP(1)) reg_sl
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(fm_data_out[7:4]),
+		.write_en(op_write80),
+		.rst(nIC),
+		.bank(fm_address_out[3]),
+		.obank(reg_cnt[4]),
+		.data_o(sl[3:0])
+		);
+	
+	assign sl[4] = sl[3:0] == 4'hf;
+	
+	wire [3:0] ssgeg;
+	
+	ym3438_op_register_opt #(.DATA_WIDTH(4), .KEEP(1)) reg_ssgeg
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(fm_data_out[3:0]),
+		.write_en(op_write90),
+		.rst(nIC),
+		.bank(fm_address_out[3]),
+		.obank(reg_cnt[4]),
+		.data_o(ssgeg)
+		);
+		
+	assign ssg_enable = ssgeg[3];
+	assign ssg_inv = ssgeg[2] & ssg_enable;
+	assign ssg_repeat = ~ssgeg[0];
+	assign ssg_holdup = ssgeg[2:0] == 3'h3 | ssgeg[2:0] == 3'h5;
+	assign ssg_type0 = ssgeg[1:0] == 2'h0;
+	assign ssg_type2 = ssgeg[1:0] == 2'h2;
+	assign ssg_type3 = ssgeg[1:0] == 2'h3;
+		
+	wire [5:0] reg_a4_in;
+	wire [5:0] reg_a4_out;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(6), .KEEP(1)) reg_a4
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(reg_a4_in),
+		.data_out(reg_a4_out)
+		);
+	
+	assign reg_a4_in = nIC ? 6'h00 : (ch_writeA4 ? fm_data_out[5:0] : reg_a4_out);
+		
+	wire [5:0] reg_ac_in;
+	wire [5:0] reg_ac_out;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(6), .KEEP(1)) reg_ac
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(reg_ac_in),
+		.data_out(reg_ac_out)
+		);
+	
+	assign reg_ac_in = nIC ? 6'h00 : (ch_writeAC ? fm_data_out[5:0] : reg_ac_out);
+	
+	wire [10:0] reg_fnum_o;
+	
+	ym3438_ch_register_opt #(.DATA_WIDTH(11), .KEEP(1)) reg_fnum
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data({reg_a4_out[2:0], fm_data_out}),
+		.write_en(ch_writeA0),
+		.rst(nIC),
+		.data_o_4(reg_fnum_o)
+		);
+	
+	wire [2:0] reg_block_o;
+	
+	ym3438_ch_register_opt #(.DATA_WIDTH(3), .KEEP(1)) reg_block
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(reg_a4_out[5:3]),
+		.write_en(ch_writeA0),
+		.rst(nIC),
+		.data_o_4(reg_block_o)
+		);
+	
+	wire [10:0] reg_fnum_ch3_o_0;
+	wire [10:0] reg_fnum_ch3_o_4;
+	wire [10:0] reg_fnum_ch3_o_5;
+	
+	ym3438_ch_register_opt #(.DATA_WIDTH(11), .KEEP(1)) reg_fnum_ch3
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data({reg_ac_out[2:0], fm_data_out}),
+		.write_en(ch_writeA8),
+		.rst(nIC),
+		.data_o_0(reg_fnum_ch3_o_0),
+		.data_o_4(reg_fnum_ch3_o_4),
+		.data_o_5(reg_fnum_ch3_o_5)
+		);
+	
+	wire [2:0] reg_block_ch3_o_0;
+	wire [2:0] reg_block_ch3_o_4;
+	wire [2:0] reg_block_ch3_o_5;
+	
+	ym3438_ch_register_opt #(.DATA_WIDTH(3), .KEEP(1)) reg_block_ch3
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(reg_ac_out[5:3]),
+		.write_en(ch_writeA8),
+		.rst(nIC),
+		.data_o_0(reg_block_ch3_o_0),
+		.data_o_4(reg_block_ch3_o_4),
+		.data_o_5(reg_block_ch3_o_5)
+		);
+	
+	ym3438_ch_register_opt #(.DATA_WIDTH(3), .KEEP(1)) reg_connect
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(fm_data_out[2:0]),
+		.write_en(ch_writeB0),
+		.rst(nIC),
+		.data_o_5(connect)
+		);
+	
+	ym3438_ch_register_opt #(.DATA_WIDTH(3), .KEEP(1)) reg_fb
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(fm_data_out[5:3]),
+		.write_en(ch_writeB0),
+		.rst(nIC),
+		.data_o_0(fb)
+		);
+	
+	ym3438_ch_register_opt #(.DATA_WIDTH(3), .KEEP(1)) reg_pms
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(fm_data_out[2:0]),
+		.write_en(ch_writeB4),
+		.rst(nIC),
+		.data_o_5(pms)
+		);
+	
+	wire [1:0] ams_o;
+	
+	assign ams = am ? ams_o : 2'h0;
+	
+	ym3438_ch_register_opt #(.DATA_WIDTH(2), .KEEP(1)) reg_ams
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(fm_data_out[5:4]),
+		.write_en(ch_writeB4),
+		.rst(nIC),
+		.data_o_5(ams_o)
+		);
+	
+	wire [1:0] pan_o1;
+	wire [1:0] pan_o2;
+	
+	ym3438_ch_register_opt #(.DATA_WIDTH(2), .KEEP(1)) reg_pan
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(~fm_data_out[7:6]),
+		.write_en(ch_writeB4),
+		.rst(nIC),
+		.data_o_4(pan_o1),
+		.data_o_5(pan_o2)
+		);
+	
+	wire [1:0] pan_sel = fsm_dac_out_sel ? ~pan_o2 : ~pan_o1;
+	
+	wire load_ed_o;
+	
+	ym_edge_detect_opt load_ed
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(fsm_dac_load),
+		.outp(load_ed_o)
+		);
+
+	ym_slatch_opt #(.DATA_WIDTH(2)) pan_lock
+		(
+		.MCLK(MCLK),
+		.en(load_ed_o),
+		.inp(pan_sel),
+		.val(pan_o),
+		.nval()
+		);
+		
+	// EXTRA start
+	
+	wire [2:0] dac_index_i = reg_cnt[1:0] + (reg_cnt[2] ? 3'h3 : 3'h0) + { 2'h0, ~fsm_dac_out_sel };
+
+	ym_slatch_opt #(.DATA_WIDTH(3)) dac_index_lock
+		(
+		.MCLK(MCLK),
+		.en(load_ed_o),
+		.inp(dac_index_i),
+		.val(dac_index),
+		.nval()
+		);
+	
+	// EXTRA end
+		
+	wire reg_21_wr;
+	
+	ym3438_reg_wr_ctrl_opt #(.REG_ADDRESS(8'h21), .KEEP(1)) reg_21_ctrl
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data),
+		.bank(bank),
+		.write_addr_en(write_addr_en),
+		.write_data_en(write_data_en),
+		.reg_wr(reg_21_wr)
+		);
+		
+	ym3438_reg_data_opt #(.DATA_WIDTH(8), .KEEP(1)) reg_21_data
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data[7:0]),
+		.reg_wr(reg_21_wr),
+		.rst(nIC),
+		.data_o(reg_21)
+		);
+		
+	wire reg_22_wr;
+	
+	ym3438_reg_wr_ctrl_opt #(.REG_ADDRESS(8'h22), .KEEP(1)) reg_22_ctrl
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data),
+		.bank(bank),
+		.write_addr_en(write_addr_en),
+		.write_data_en(write_data_en),
+		.reg_wr(reg_22_wr)
+		);
+		
+	ym3438_reg_data_opt #(.DATA_WIDTH(4), .KEEP(1)) reg_22_data
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data[3:0]),
+		.reg_wr(reg_22_wr),
+		.rst(nIC),
+		.data_o(lfo)
+		);
+	
+	wire [9:0] reg_timer_a_o;
+		
+	wire reg_24_wr;
+	
+	ym3438_reg_wr_ctrl_opt #(.REG_ADDRESS(8'h24), .KEEP(1)) reg_24_ctrl
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data),
+		.bank(bank),
+		.write_addr_en(write_addr_en),
+		.write_data_en(write_data_en),
+		.reg_wr(reg_24_wr)
+		);
+		
+	ym3438_reg_data_opt #(.DATA_WIDTH(8), .KEEP(1)) reg_24_data
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data[7:0]),
+		.reg_wr(reg_24_wr),
+		.rst(nIC),
+		.data_o(reg_timer_a_o[9:2])
+		);
+		
+	wire reg_25_wr;
+	
+	ym3438_reg_wr_ctrl_opt #(.REG_ADDRESS(8'h25), .KEEP(1)) reg_25_ctrl
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data),
+		.bank(bank),
+		.write_addr_en(write_addr_en),
+		.write_data_en(write_data_en),
+		.reg_wr(reg_25_wr)
+		);
+		
+	ym3438_reg_data_opt #(.DATA_WIDTH(2), .KEEP(1)) reg_25_data
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data[1:0]),
+		.reg_wr(reg_25_wr),
+		.rst(nIC),
+		.data_o(reg_timer_a_o[1:0])
+		);
+	
+	wire [7:0] reg_timer_b_o;
+		
+	wire reg_26_wr;
+	
+	ym3438_reg_wr_ctrl_opt #(.REG_ADDRESS(8'h26), .KEEP(1)) reg_26_ctrl
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data),
+		.bank(bank),
+		.write_addr_en(write_addr_en),
+		.write_data_en(write_data_en),
+		.reg_wr(reg_26_wr)
+		);
+		
+	ym3438_reg_data_opt #(.DATA_WIDTH(8), .KEEP(1)) reg_26_data
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data[7:0]),
+		.reg_wr(reg_26_wr),
+		.rst(nIC),
+		.data_o(reg_timer_b_o)
+		);
+		
+	wire reg_27_wr;
+	
+	ym3438_reg_wr_ctrl_opt #(.REG_ADDRESS(8'h27), .KEEP(1)) reg_27_ctrl
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data),
+		.bank(bank),
+		.write_addr_en(write_addr_en),
+		.write_data_en(write_data_en),
+		.reg_wr(reg_27_wr)
+		);
+	
+	wire [3:0] reg_27_timer_ctrl_o;
+		
+	ym3438_reg_data_opt #(.DATA_WIDTH(4), .KEEP(1)) reg_27_timer_ctrl
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data[3:0]),
+		.reg_wr(reg_27_wr),
+		.rst(nIC),
+		.data_o(reg_27_timer_ctrl_o)
+		);
+	
+	wire [1:0] reg_27_timer_reset_o;
+
+	ym_sr_bit_array_opt #(.DATA_WIDTH(2), .KEEP(1)) reg_27_timer_reset
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(reg_27_wr ? data[5:4] : 2'h0),
+		.data_out(reg_27_timer_reset_o)
+		);
+	
+	wire [1:0] reg_27_mode_o;
+		
+	ym3438_reg_data_opt #(.DATA_WIDTH(2), .KEEP(1)) reg_27_mode
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data[7:6]),
+		.reg_wr(reg_27_wr),
+		.rst(nIC),
+		.data_o(reg_27_mode_o)
+		);
+		
+	wire reg_28_wr;
+	
+	ym3438_reg_wr_ctrl_opt #(.REG_ADDRESS(8'h28), .KEEP(1)) reg_28_ctrl
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data),
+		.bank(bank),
+		.write_addr_en(write_addr_en),
+		.write_data_en(write_data_en),
+		.reg_wr(reg_28_wr)
+		);
+	
+	wire [2:0] reg_28_ch_o;
+	wire [3:0] reg_28_slot_o;
+		
+	ym3438_reg_data_opt #(.DATA_WIDTH(3), .KEEP(1)) reg_28_ch
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data[2:0]),
+		.reg_wr(reg_28_wr),
+		.rst(nIC),
+		.data_o(reg_28_ch_o)
+		);
+		
+	ym3438_reg_data_opt #(.DATA_WIDTH(4), .KEEP(1)) reg_28_slot
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data[7:4]),
+		.reg_wr(reg_28_wr),
+		.rst(nIC),
+		.data_o(reg_28_slot_o)
+		);
+		
+	wire reg_2a_wr;
+	
+	ym3438_reg_wr_ctrl_opt #(.REG_ADDRESS(8'h2a), .KEEP(1)) reg_2a_ctrl
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data),
+		.bank(bank),
+		.write_addr_en(write_addr_en),
+		.write_data_en(write_data_en),
+		.reg_wr(reg_2a_wr)
+		);
+		
+	ym3438_reg_data_opt #(.DATA_WIDTH(7), .KEEP(1)) reg_2a_dac
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data[6:0]),
+		.reg_wr(reg_2a_wr),
+		.rst(nIC),
+		.data_o(dac[6:0])
+		);
+
+	
+	wire reg_dac_msb_in;
+	wire reg_dac_msb_out;
+
+	ym_sr_bit_opt #(.KEEP(1)) reg_dac_msb
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(reg_dac_msb_in),
+		.sr_out(reg_dac_msb_out)
+		);
+		
+	assign reg_dac_msb_in = nIC ? 1'h0 : (reg_2a_wr ? ~data[7] : reg_dac_msb_out);
+	assign dac[7] = ~reg_dac_msb_out;
+		
+	wire reg_2b_wr;
+	
+	ym3438_reg_wr_ctrl_opt #(.REG_ADDRESS(8'h2b), .KEEP(1)) reg_2b_ctrl
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data),
+		.bank(bank),
+		.write_addr_en(write_addr_en),
+		.write_data_en(write_data_en),
+		.reg_wr(reg_2b_wr)
+		);
+		
+	ym3438_reg_data_opt #(.DATA_WIDTH(1), .KEEP(1)) reg_2b_dac_en
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data[7]),
+		.reg_wr(reg_2b_wr),
+		.rst(nIC),
+		.data_o(dac_en)
+		);
+		
+	wire reg_2c_wr;
+	
+	ym3438_reg_wr_ctrl_opt #(.REG_ADDRESS(8'h2c), .KEEP(1)) reg_2c_ctrl
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data),
+		.bank(bank),
+		.write_addr_en(write_addr_en),
+		.write_data_en(write_data_en),
+		.reg_wr(reg_2c_wr)
+		);
+		
+	ym3438_reg_data_opt #(.DATA_WIDTH(5), .KEEP(1)) reg_2c_data
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data[7:3]),
+		.reg_wr(reg_2c_wr),
+		.rst(nIC),
+		.data_o(reg_2c)
+		);
+	
+	wire kon_sr1_in;
+	wire kon_sr1_out;
+	
+	ym_sr_bit_opt #(.SR_LENGTH(6), .KEEP(1)) kon_sr1
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(kon_sr1_in),
+		.sr_out(kon_sr1_out)
+		);
+	
+	wire kon_sr2_in;
+	wire kon_sr2_out;
+	
+	ym_sr_bit_opt #(.SR_LENGTH(6), .KEEP(1)) kon_sr2
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(kon_sr2_in),
+		.sr_out(kon_sr2_out)
+		);
+	
+	wire kon_sr3_in;
+	wire kon_sr3_out;
+	
+	ym_sr_bit_opt #(.SR_LENGTH(6), .KEEP(1)) kon_sr3
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(kon_sr3_in),
+		.sr_out(kon_sr3_out)
+		);
+	
+	wire kon_sr4_in;
+	wire kon_sr4_out;
+	
+	ym_sr_bit_opt #(.SR_LENGTH(6), .KEEP(1)) kon_sr4
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(kon_sr4_in),
+		.sr_out(kon_sr4_out)
+		);
+	
+	wire kon_ch_match = ~nIC & (reg_cnt == { 2'h0, reg_28_ch_o });
+	
+	assign kon_sr1_in = kon_ch_match ? reg_28_slot_o[0] : (~nIC & kon_sr4_out);
+	assign kon_sr2_in = kon_ch_match ? reg_28_slot_o[3] : kon_sr1_out;
+	assign kon_sr3_in = kon_ch_match ? reg_28_slot_o[1] : kon_sr2_out;
+	assign kon_sr4_in = kon_ch_match ? reg_28_slot_o[2] : kon_sr3_out;
+	
+	assign kon = kon_sr4_out | kon_csm;
+	
+	assign mode_csm = reg_27_mode_o == 2'b10;
+	
+	wire mode_ch3 = reg_27_mode_o != 2'b00;
+	
+	wire timer_test = reg_21[2];
+	
+	wire timer_a_inc;
+	wire timer_a_load;
+	wire timer_a_load_cnt;
+	wire timer_a_cout;
+	wire timer_a_load_sr_o;
+	wire timer_a_of_sr_o;
+	wire timer_a_load_cnt_i;
+	
+	
+	ym_cnt_bit_load_opt #(.DATA_WIDTH(10), .KEEP(1)) timer_a_cnt
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.c_in(timer_a_inc),
+		.reset(~timer_a_load),
+		.load(timer_a_load_cnt),
+		.load_val(reg_timer_a_o),
+		.val(),
+		.c_out(timer_a_cout)
+		);
+	
+	assign timer_a_inc = (timer_a_load & fsm_sel_1) | timer_test;
+	
+	ym_slatch_opt timer_a_load_l
+		(
+		.MCLK(MCLK),
+		.en(timer_ed),
+		.inp(reg_27_timer_ctrl_o[0]),
+		.val(timer_a_load),
+		.nval()
+		);
+	
+	ym_sr_bit_opt #(.KEEP(1)) timer_a_load_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(timer_a_load),
+		.sr_out(timer_a_load_sr_o)
+		);
+	
+	ym_sr_bit_opt #(.KEEP(1)) timer_a_of_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(timer_a_cout),
+		.sr_out(timer_a_of_sr_o)
+		);
+		
+	assign timer_a_load_cnt_i = (~timer_a_load_sr_o & timer_a_load) | timer_a_of_sr_o;
+	
+	ym_sr_bit_opt #(.KEEP(1)) timer_a_load_cnt_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(timer_a_load_cnt_i),
+		.sr_out(timer_a_load_cnt)
+		);
+	
+	wire timer_a_status_reset = nIC | reg_27_timer_reset_o[0];
+	
+	wire timer_a_status_set = ~timer_a_status_reset & timer_a_of_sr_o & reg_27_timer_ctrl_o[2];
+	
+	wire timer_a_status_sr_o2;
+	wire timer_a_status_sr_o = ~timer_a_status_sr_o2;
+	assign timer_a_status = ~timer_a_status_sr_o;
+	
+	ym_sr_bit_opt #(.KEEP(1)) timer_a_status_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(~((timer_a_status_sr_o & ~timer_a_status_reset) | timer_a_status_set)),
+		.sr_out(timer_a_status_sr_o2)
+		);
+
+	
+	wire timer_b_inc;
+	wire timer_b_load;
+	wire timer_b_load_cnt;
+	wire timer_b_sub_cout;
+	wire timer_b_cout;
+	wire timer_b_load_sr_o;
+	wire timer_b_of_sr_o;
+	wire timer_b_load_cnt_i;
+	wire timer_b_subcnt_of_sr_o;
+	
+	ym_cnt_bit_opt #(.DATA_WIDTH(4), .KEEP(1)) timer_b_subcnt
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.c_in(fsm_sel_1),
+		.reset(nIC),
+		.val(),
+		.c_out(timer_b_sub_cout)
+		);
+	
+	ym_sr_bit_opt #(.KEEP(1)) timer_b_subcnt_of_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(timer_b_sub_cout),
+		.sr_out(timer_b_subcnt_of_sr_o)
+		);
+	
+	
+	ym_cnt_bit_load_opt #(.DATA_WIDTH(8), .KEEP(1)) timer_b_cnt
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.c_in(timer_b_inc),
+		.reset(~timer_b_load),
+		.load(timer_b_load_cnt),
+		.load_val(reg_timer_b_o),
+		.val(),
+		.c_out(timer_b_cout)
+		);
+	
+	assign timer_b_inc = (timer_b_load & timer_b_subcnt_of_sr_o) | timer_test;
+	
+	ym_slatch_opt timer_b_load_l
+		(
+		.MCLK(MCLK),
+		.en(timer_ed),
+		.inp(reg_27_timer_ctrl_o[1]),
+		.val(timer_b_load),
+		.nval()
+		);
+	
+	ym_sr_bit_opt #(.KEEP(1)) timer_b_load_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(timer_b_load),
+		.sr_out(timer_b_load_sr_o)
+		);
+	
+	ym_sr_bit_opt #(.KEEP(1)) timer_b_of_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(timer_b_cout),
+		.sr_out(timer_b_of_sr_o)
+		);
+		
+	assign timer_b_load_cnt_i = (~timer_b_load_sr_o & timer_b_load) | timer_b_of_sr_o;
+	
+	ym_sr_bit_opt #(.KEEP(1)) timer_b_load_cnt_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(timer_b_load_cnt_i),
+		.sr_out(timer_b_load_cnt)
+		);
+	
+	wire timer_b_status_reset = nIC | reg_27_timer_reset_o[1];
+	
+	wire timer_b_status_set = ~timer_b_status_reset & timer_b_of_sr_o & reg_27_timer_ctrl_o[3];
+	
+	wire timer_b_status_sr_o2;
+	wire timer_b_status_sr_o = ~timer_b_status_sr_o2;
+	assign timer_b_status = ~timer_b_status_sr_o;
+	
+	ym_sr_bit_opt #(.KEEP(1)) timer_b_status_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(~((timer_b_status_sr_o & ~timer_b_status_reset) | timer_b_status_set)),
+		.sr_out(timer_b_status_sr_o2)
+		);
+	
+	wire kon_csm_o;
+	
+	ym_slatch_opt kon_csm_l
+		(
+		.MCLK(MCLK),
+		.en(timer_ed),
+		.inp(mode_csm & timer_a_load_cnt_i),
+		.val(kon_csm_o),
+		.nval()
+		);
+		
+	assign kon_csm = kon_csm_o & ch3_sel;
+	
+	wire [10:0] fnum_mux;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(11)) fnum_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(fnum_mux),
+		.data_out(fnum)
+		);
+	
+	wire ch3_match = reg_cnt[2:0] == 3'h1;
+	
+	wire fnum_sel_ch3_1 = (reg_cnt[4:3] == 2'h0) & ch3_match & mode_ch3;
+	wire fnum_sel_ch3_2 = (reg_cnt[4:3] == 2'h2) & ch3_match & mode_ch3;
+	wire fnum_sel_ch3_3 = (reg_cnt[4:3] == 2'h1) & ch3_match & mode_ch3;
+	wire fnum_sel_normal = ~fnum_sel_ch3_1 & ~fnum_sel_ch3_2 & ~fnum_sel_ch3_3;
+
+	assign fnum_mux = (reg_fnum_o & { 11 {fnum_sel_normal}})
+		| (reg_fnum_ch3_o_0 & { 11 {fnum_sel_ch3_3}})
+		| (reg_fnum_ch3_o_4 & { 11 {fnum_sel_ch3_2}})
+		| (reg_fnum_ch3_o_5 & { 11 {fnum_sel_ch3_1}});
+
+	assign block = (reg_block_o & { 3 {fnum_sel_normal}})
+		| (reg_block_ch3_o_0 & { 3 {fnum_sel_ch3_3}})
+		| (reg_block_ch3_o_4 & { 3 {fnum_sel_ch3_2}})
+		| (reg_block_ch3_o_5 & { 3 {fnum_sel_ch3_1}});
+	
+	assign note[1] = fnum_mux[10];
+	assign note[0] = fnum_mux[10] ? (fnum_mux[9:7] != 3'h0) : (fnum_mux[9:7] ==3'h7);
+	
+	wire rate_sel_a = rate_sel == 2'h0;
+	wire rate_sel_d = rate_sel == 2'h1;
+	wire rate_sel_s = rate_sel == 2'h2;
+	wire rate_sel_r = rate_sel == 2'h3;
+	
+	assign rate = (
+		({5{rate_sel_a}} & ar)
+		| ({5{rate_sel_d}} & dr)
+		| ({5{rate_sel_s}} & sr)
+		| {({4{rate_sel_r}} & rr), rate_sel_r}
+		);
+	
+endmodule
+
+module ym3438_op_register_opt #(parameter DATA_WIDTH = 1, KEEP = 0)
+	(
+	input MCLK,
+	input c1,
+	input c2,
+	input [DATA_WIDTH-1:0] data,
+	input write_en,
+	input rst,
+	input bank,
+	input obank,
+	output [DATA_WIDTH-1:0] data_o
+	);
+
+	// STAGE 2: shared rising-edge-of-c2 capture pulse for collapsed cells
+	reg c2_prev = 1'h0;
+	wire c2r = c2 & ~c2_prev;
+	always @(posedge MCLK) c2_prev <= c2;
+
+	wire [DATA_WIDTH-1:0] sr1_in;
+	wire [DATA_WIDTH-1:0] sr1_out;
+	ym_sr_bit_array_opt #(.DATA_WIDTH(DATA_WIDTH), .SR_LENGTH(12), .KEEP(KEEP)) sr1
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(sr1_in),
+		.data_out(sr1_out)
+		);
+
+	wire [DATA_WIDTH-1:0] sr2_in;
+	wire [DATA_WIDTH-1:0] sr2_out;
+	ym_sr_bit_array_opt #(.DATA_WIDTH(DATA_WIDTH), .SR_LENGTH(12), .KEEP(KEEP)) sr2
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(sr2_in),
+		.data_out(sr2_out)
+		);
+	
+	wire write1 = write_en & ~bank;
+	wire write2 = write_en & bank;
+
+	assign sr1_in = rst ? {DATA_WIDTH{1'h0}} : (write1 ? data : sr1_out);
+	assign sr2_in = rst ? {DATA_WIDTH{1'h0}} : (write2 ? data : sr2_out);
+	
+	assign data_o = obank ? sr2_out : sr1_out;
+	
+endmodule
+
+module ym3438_ch_register_opt #(parameter DATA_WIDTH = 1, KEEP = 0)
+	(
+	input MCLK,
+	input c1,
+	input c2,
+	input [DATA_WIDTH-1:0] data,
+	input write_en,
+	input rst,
+	output [DATA_WIDTH-1:0] data_o_0,
+	output [DATA_WIDTH-1:0] data_o_1,
+	output [DATA_WIDTH-1:0] data_o_2,
+	output [DATA_WIDTH-1:0] data_o_3,
+	output [DATA_WIDTH-1:0] data_o_4,
+	output [DATA_WIDTH-1:0] data_o_5
+	);
+
+	// STAGE 2: shared rising-edge-of-c2 capture pulse for collapsed cells
+	reg c2_prev = 1'h0;
+	wire c2r = c2 & ~c2_prev;
+	always @(posedge MCLK) c2_prev <= c2;
+
+	// Only sr_0 sees the rst (nIC) / write mux -> phase-varying bit_in -> KEEP.
+	// sr_1..sr_5 are pure registered chains (bit_in = previous sr_out) -> collapse.
+	wire [DATA_WIDTH-1:0] sr_in[0:5];
+	wire [DATA_WIDTH-1:0] sr_out[0:5];
+	ym_sr_bit_array_opt #(.DATA_WIDTH(DATA_WIDTH), .KEEP(KEEP)) sr_0
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(sr_in[0]),
+		.data_out(sr_out[0])
+		);
+	ym_sr_bit_array_opt #(.DATA_WIDTH(DATA_WIDTH)) sr_1
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(sr_in[1]),
+		.data_out(sr_out[1])
+		);
+	ym_sr_bit_array_opt #(.DATA_WIDTH(DATA_WIDTH)) sr_2
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(sr_in[2]),
+		.data_out(sr_out[2])
+		);
+	ym_sr_bit_array_opt #(.DATA_WIDTH(DATA_WIDTH)) sr_3
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(sr_in[3]),
+		.data_out(sr_out[3])
+		);
+	ym_sr_bit_array_opt #(.DATA_WIDTH(DATA_WIDTH)) sr_4
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(sr_in[4]),
+		.data_out(sr_out[4])
+		);
+	ym_sr_bit_array_opt #(.DATA_WIDTH(DATA_WIDTH)) s_5
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(sr_in[5]),
+		.data_out(sr_out[5])
+		);
+	
+	assign sr_in[0] = rst ? {DATA_WIDTH{1'h0}} : (write_en ? data : sr_out[5]);
+	assign sr_in[1] = sr_out[0]; 
+	assign sr_in[2] = sr_out[1]; 
+	assign sr_in[3] = sr_out[2]; 
+	assign sr_in[4] = sr_out[3]; 
+	assign sr_in[5] = sr_out[4];
+
+	assign data_o_0 = sr_out[0];
+	assign data_o_1 = sr_out[1];
+	assign data_o_2 = sr_out[2];
+	assign data_o_3 = sr_out[3];
+	assign data_o_4 = sr_out[4];
+	assign data_o_5 = sr_out[5];
+	
+endmodule
+
+module ym3438_reg_wr_ctrl_opt #(parameter REG_ADDRESS = 0, KEEP = 0)
+	(
+	input MCLK,
+	input c1,
+	input c2,
+	input [7:0] data,
+	input bank,
+	input write_addr_en,
+	input write_data_en,
+	output reg_wr
+	);
+
+	// STAGE 2: shared rising-edge-of-c2 capture pulse for collapsed cells
+	reg c2_prev = 1'h0;
+	wire c2r = c2 & ~c2_prev;
+	always @(posedge MCLK) c2_prev <= c2;
+
+
+	wire reg_addr_o2;
+	wire reg_addr_o = ~reg_addr_o2;
+	wire reg_addr_sel = ~bank & data == REG_ADDRESS & write_addr_en;
+
+	// bit_in depends on the async bus (data/bank/write_addr_en) -> phase-varying
+	// during a CPU write -> KEEP two-register.
+	ym_sr_bit_opt #(.KEEP(KEEP)) reg_addr_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(~(reg_addr_sel | (reg_addr_o & ~write_addr_en))),
+		.sr_out(reg_addr_o2)
+		);
+
+		
+	assign reg_wr = reg_addr_o & ~bank & write_data_en;
+
+endmodule
+
+module ym3438_reg_data_opt #(parameter DATA_WIDTH = 1, KEEP = 0)
+	(
+	input MCLK,
+	input c1,
+	input c2,
+	input [DATA_WIDTH-1:0] data,
+	input reg_wr,
+	input rst,
+	output [DATA_WIDTH-1:0] data_o
+	);
+
+	// STAGE 2: shared rising-edge-of-c2 capture pulse for collapsed cells
+	reg c2_prev = 1'h0;
+	wire c2r = c2 & ~c2_prev;
+	always @(posedge MCLK) c2_prev <= c2;
+
+
+	wire [DATA_WIDTH-1:0] reg_sr_in;
+	wire [DATA_WIDTH-1:0] reg_sr_out;
+
+	// bit_in = rst(nIC) ? 0 : (reg_wr ? data : recirc) -> phase-varying at
+	// IC-release and during async bus writes -> KEEP two-register.
+	ym_sr_bit_array_opt #(.DATA_WIDTH(DATA_WIDTH), .KEEP(KEEP)) reg_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(reg_sr_in),
+		.data_out(reg_sr_out)
+		);
+
+		
+	assign reg_sr_in = rst ? {DATA_WIDTH{1'h0}} : (reg_wr ? data : reg_sr_out);
+	assign data_o = reg_sr_out;
+
+endmodule
+
+// ==== from ym3438_lfo.v ====
+module ym3438_lfo_opt
+	(
+	input MCLK,
+	input c1,
+	input c2,
+	input [3:0] lfo,
+	input fsm_sel23,
+	input [7:0] reg_21,
+	input IC,
+	input [2:0] pms,
+	input [10:0] fnum,
+	output [5:0] lfo_am,
+	output [11:0] fnum_lfo
+	);
+
+	// STAGE 2: shared rising-edge-of-c2 capture pulse for collapsed cells
+	reg c2_prev = 1'h0;
+	wire c2r = c2 & ~c2_prev;
+	always @(posedge MCLK) c2_prev <= c2;
+	
+	wire [6:0] lfo_subcnt_sr_in;
+	wire [6:0] lfo_subcnt_sr_out;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(7), .KEEP(1)) lfo_subcnt_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(lfo_subcnt_sr_in),
+		.data_out(lfo_subcnt_sr_out)
+		);
+	
+	wire lfo_subcnt_inc = reg_21[1] | fsm_sel23;
+	
+	wire lfo_subcnt_of;
+	
+	wire lfo_subcnt_res = ~(lfo_subcnt_of | ~IC);
+	
+	wire [6:0] lfo_subcnt_sum = lfo_subcnt_sr_out + lfo_subcnt_inc;
+	
+	assign lfo_subcnt_sr_in = lfo_subcnt_res ? lfo_subcnt_sum : 7'h00;
+	
+	wire [7:0] lfo_sel;
+	
+	genvar i;
+		
+	generate
+		for (i = 0; i < 8; i=i+1)
+		begin : l1
+			assign lfo_sel[i] = lfo[2:0] == i;
+		end
+	endgenerate
+	
+	wire [7:0] lfo_of_check;
+	
+	assign lfo_of_check[0] = lfo_sel[0] & lfo_subcnt_sr_out[6] & lfo_subcnt_sr_out[5]
+		& lfo_subcnt_sr_out[3] & lfo_subcnt_sr_out[2];
+	assign lfo_of_check[1] = lfo_sel[1] & lfo_subcnt_sr_out[6] & lfo_subcnt_sr_out[3]
+		& lfo_subcnt_sr_out[2] & lfo_subcnt_sr_out[0];
+	assign lfo_of_check[2] = lfo_sel[2] & lfo_subcnt_sr_out[6] & lfo_subcnt_sr_out[2]
+		& lfo_subcnt_sr_out[1] & lfo_subcnt_sr_out[0];
+	assign lfo_of_check[3] = lfo_sel[3] & lfo_subcnt_sr_out[6] & lfo_subcnt_sr_out[1] & lfo_subcnt_sr_out[0];
+	assign lfo_of_check[4] = lfo_sel[4] & lfo_subcnt_sr_out[5] & lfo_subcnt_sr_out[4]
+		& lfo_subcnt_sr_out[3] & lfo_subcnt_sr_out[2] & lfo_subcnt_sr_out[1];
+	assign lfo_of_check[5] = lfo_sel[5] & lfo_subcnt_sr_out[5] & lfo_subcnt_sr_out[3] & lfo_subcnt_sr_out[2];
+	assign lfo_of_check[6] = lfo_sel[6] & lfo_subcnt_sr_out[3];
+	assign lfo_of_check[7] = lfo_sel[7] & lfo_subcnt_sr_out[2] & lfo_subcnt_sr_out[0];
+	
+	assign lfo_subcnt_of = lfo_of_check != 8'h00;
+	
+	wire [6:0] lfo_cnt_sr_in;
+	wire [6:0] lfo_cnt_sr_out;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(7)) lfo_cnt_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(lfo_cnt_sr_in),
+		.data_out(lfo_cnt_sr_out)
+		);
+	
+	wire [6:0] lfo_cnt_sum = lfo_cnt_sr_out + { 6'h0, lfo_subcnt_of };
+	
+	assign lfo_cnt_sr_in = lfo[3] ? lfo_cnt_sum : 7'h00;
+	
+	wire fsm_sel0;
+	
+	ym_sr_bit_opt fsm_sel0_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(fsm_sel23),
+		.sr_out(fsm_sel0)
+		);
+	
+	wire lfo_cnt_load;
+	
+	ym_edge_detect_opt lfo_ed
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(fsm_sel0),
+		.outp(lfo_cnt_load)
+		);
+	
+	wire [6:0] lfo_cnt_lock;
+	
+	ym_slatch_opt #(.DATA_WIDTH(7)) lfo_cnt_l
+		(
+		.MCLK(MCLK),
+		.en(lfo_cnt_load),
+		.inp(lfo_cnt_sr_out),
+		.val(lfo_cnt_lock),
+		.nval()
+		);
+	
+	assign lfo_am = ~(lfo_cnt_lock[5:0] ^ {6{lfo_cnt_lock[6]}});
+	
+	wire lfo_pm_sign_l_o;
+	
+	ym_dlatch_1_opt lfo_pm_sign_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(lfo_cnt_lock[6]),
+		.val(lfo_pm_sign_l_o),
+		.nval()
+		);
+	
+	wire [2:0] lfo_pm_val = lfo_cnt_lock[4:2] ^ {3{lfo_cnt_lock[5]}};
+	
+	wire [7:0] lfo_pm_val_sel;
+		
+	generate
+		for (i = 0; i < 8; i=i+1)
+		begin : l2
+			assign lfo_pm_val_sel[i] = lfo_pm_val == i;
+		end
+	endgenerate
+	
+	wire lfo_pms_1 = pms == 3'h1;
+	wire lfo_pms_2 = pms == 3'h2;
+	wire lfo_pms_3 = pms == 3'h3;
+	wire lfo_pms_4 = pms == 3'h4;
+	wire lfo_pms_5 = pms == 3'h5;
+	wire lfo_pms_6 = pms == 3'h6;
+	wire lfo_pms_7 = pms == 3'h7;
+	wire lfo_pms_6_7 = lfo_pms_6 | lfo_pms_7;
+	wire lfo_pms_5_6_7 = lfo_pms_5 | lfo_pms_6_7;
+	
+	wire lfo_pm_sel_sh2_2 = ((lfo_pm_val_sel[3] | lfo_pm_val_sel[6]) & lfo_pms_5_6_7)
+		| ((lfo_pm_val_sel[2] | lfo_pm_val_sel[6]) & lfo_pms_4)
+		| ((lfo_pm_val_sel[2] | lfo_pm_val_sel[3] | lfo_pm_val_sel[6] | lfo_pm_val_sel[7]) & lfo_pms_3)
+		| ((lfo_pm_val_sel[3] | lfo_pm_val_sel[4] | lfo_pm_val_sel[5]) & lfo_pms_2)
+		| ((lfo_pm_val_sel[4] | lfo_pm_val_sel[5] | lfo_pm_val_sel[6] | lfo_pm_val_sel[7]) & lfo_pms_1);
+	
+	wire lfo_pm_sel_sh2_1 = lfo_pm_val_sel[7] & lfo_pms_5_6_7;
+	
+	wire lfo_pm_sel_sh1_1 = ((lfo_pm_val_sel[2] | lfo_pm_val_sel[3]) & lfo_pms_5_6_7)
+		| ((lfo_pm_val_sel[3] | lfo_pm_val_sel[4] | lfo_pm_val_sel[5] | lfo_pm_val_sel[6]) & lfo_pms_4)
+		| ((lfo_pm_val_sel[4] | lfo_pm_val_sel[5] | lfo_pm_val_sel[6] | lfo_pm_val_sel[7]) & lfo_pms_3)
+		| ((lfo_pm_val_sel[6] | lfo_pm_val_sel[7]) & lfo_pms_2);
+	
+	wire lfo_pm_sel_sh1_0 = ((lfo_pm_val_sel[4] | lfo_pm_val_sel[5] | lfo_pm_val_sel[6] | lfo_pm_val_sel[7]) & lfo_pms_5_6_7)
+		| (lfo_pm_val_sel[7] & lfo_pms_4);
+	
+	wire lfo_pms_5_l_o;
+	wire lfo_pms_6_l_o;
+	wire lfo_pms_7_l_o;
+	
+	ym_dlatch_1_opt lfo_pms_5_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(lfo_pms_6_7),
+		.val(),
+		.nval(lfo_pms_5_l_o)
+		);
+	
+	ym_dlatch_1_opt lfo_pms_6_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(~lfo_pms_6),
+		.val(),
+		.nval(lfo_pms_6_l_o)
+		);
+	
+	ym_dlatch_1_opt lfo_pms_7_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(~lfo_pms_7),
+		.val(),
+		.nval(lfo_pms_7_l_o)
+		);
+		
+	wire [6:0] lfo_pm_add_1_i =
+		~((fnum[10:4] & {7{lfo_pm_sel_sh1_0}}) | ({1'h0, fnum[10:5] } & {7{lfo_pm_sel_sh1_1}}));
+	wire [6:0] lfo_pm_add_2_i =
+		~(({ 1'h0, fnum[10:5] } & {7{lfo_pm_sel_sh2_1}}) | ({2'h0, fnum[10:6] } & {7{lfo_pm_sel_sh2_2}}));
+	wire [6:0] lfo_pm_add_1_o;
+	wire [6:0] lfo_pm_add_2_o;
+	
+	ym_dlatch_1_opt #(.DATA_WIDTH(7)) lfo_pm_add_1_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(lfo_pm_add_1_i),
+		.val(),
+		.nval(lfo_pm_add_1_o)
+		);
+	
+	ym_dlatch_1_opt #(.DATA_WIDTH(7)) lfo_pm_add_2_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(lfo_pm_add_2_i),
+		.val(),
+		.nval(lfo_pm_add_2_o)
+		);
+	
+	wire [7:0] lfo_pm_sum = lfo_pm_add_1_o + lfo_pm_add_2_o;
+	
+	wire [7:0] lfo_pm_sum_sh =
+		(lfo_pm_sum & {8{lfo_pms_7_l_o}})
+		| ({ 1'h0, lfo_pm_sum[7:1] } & {8{lfo_pms_6_l_o}})
+		| ({ 2'h0, lfo_pm_sum[7:2] } & {8{lfo_pms_5_l_o}});
+	
+	wire [7:0] lfo_pm_sum_xnor = ~(lfo_pm_sum_sh ^ {8{lfo_pm_sign_l_o}});
+	
+	wire [7:0] lfo_pm_sum_o;
+	
+	ym_dlatch_2_opt #(.DATA_WIDTH(8)) lfo_pm_sum_l
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(lfo_pm_sum_xnor),
+		.val(),
+		.nval(lfo_pm_sum_o)
+		);
+	
+	wire lfo_pm_sign_l2_o;
+	
+	ym_dlatch_2_opt lfo_pm_sign_l2
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(~lfo_pm_sign_l_o),
+		.val(),
+		.nval(lfo_pm_sign_l2_o)
+		);
+	
+	wire lfo_pm_sign_l3_o;
+	
+	ym_dlatch_2_opt lfo_pm_sign_l3
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(lfo_pm_sign_l_o),
+		.val(lfo_pm_sign_l3_o),
+		.nval()
+		);
+	
+	wire [10:0] fnum_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(11)) fnum_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(fnum),
+		.data_out(fnum_sr_o)
+		);
+	
+	wire [11:0] fnum_lfo_add = {fnum_sr_o, 1'h0} + { {4 {lfo_pm_sign_l2_o}}, lfo_pm_sum_o} + lfo_pm_sign_l3_o;
+	
+	ym_dlatch_1_opt #(.DATA_WIDTH(12)) fnum_lfo_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(fnum_lfo_add),
+		.val(fnum_lfo),
+		.nval()
+		);
+	
+
+endmodule
+
+// ==== from ym3438_detune.v ====
+module ym3438_detune_opt
+	(
+	input MCLK,
+	input c1,
+	input c2,
+	input [2:0] dt,
+	input [4:0] kcode,
+	output dt_sign_1,
+	output dt_sign_2,
+	output [4:0] dt_value
+	);
+
+	// STAGE 2: shared rising-edge-of-c2 capture pulse for collapsed cells
+	reg c2_prev = 1'h0;
+	wire c2r = c2 & ~c2_prev;
+	always @(posedge MCLK) c2_prev <= c2;
+	
+	wire [2:0] dt_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(3)) dt_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(dt),
+		.data_out(dt_sr_o)
+		);
+	
+	assign dt_sign_1 = dt_sr_o[2];
+	
+	ym_sr_bit_opt dt_sr2
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(dt_sign_1),
+		.sr_out(dt_sign_2)
+		);
+	
+	wire dt_1_2_3 = dt_sr_o[0] | dt_sr_o[1];
+	wire dt_3 = dt_sr_o[0] & dt_sr_o[1];
+	
+	wire [6:0] dt_sum;
+	assign dt_sum[6:2] = 1'h1 + { dt_1_2_3, 1'h0, dt_sr_o[1], dt_3 } + { 1'h0, kcode[4:2] };
+	assign dt_sum[1:0] = kcode[4:2] == 3'h7 ? 2'h0 : kcode[1:0];
+	
+	wire dt_shift_5 = dt_sum[6:3] == 4'h5 & dt_1_2_3;
+	wire dt_shift_6 = dt_sum[6:3] == 4'h6 & dt_1_2_3;
+	wire dt_shift_7 = dt_sum[6:3] == 4'h7 & dt_1_2_3;
+	wire dt_shift_8 = dt_sum[6:3] == 4'h8 & dt_1_2_3;
+	wire dt_shift_9 = dt_sum[6:3] == 4'h9 & dt_1_2_3;
+	
+	wire [7:0] dt_index;
+	
+	genvar i;
+	generate
+		for (i = 0; i < 8; i = i + 1)
+		begin : l1
+			assign dt_index[i] = dt_sum[2:0] == i;
+		end
+	endgenerate
+	
+	wire [3:0] dt_val1;
+	
+	assign dt_val1[0] = dt_index[1] | dt_index[2] | dt_index[6] | dt_index[7];
+	assign dt_val1[1] = dt_index[2] | dt_index[4] | dt_index[6];
+	assign dt_val1[2] = dt_index[3] | dt_index[4] | dt_index[7];
+	assign dt_val1[3] = dt_index[5] | dt_index[6] | dt_index[7];
+	
+	assign dt_value[0] = (dt_shift_9 & dt_val1[0]) | (dt_shift_8 & dt_val1[1]) | (dt_shift_7 & dt_val1[2])
+		 | (dt_shift_6 & dt_val1[3]) | dt_shift_5;
+	assign dt_value[1] = (dt_shift_9 & dt_val1[1]) | (dt_shift_8 & dt_val1[2]) | (dt_shift_7 & dt_val1[3])
+		 | dt_shift_6;
+	assign dt_value[2] = (dt_shift_9 & dt_val1[2]) | (dt_shift_8 & dt_val1[3]) | dt_shift_7;
+	assign dt_value[3] = (dt_shift_9 & dt_val1[3]) | dt_shift_8;
+	assign dt_value[4] = dt_shift_9;
+	
+
+endmodule
+
+// ==== from ym3438_pg.v ====
+module ym3438_pg_opt
+	(
+	input MCLK,
+	input c1,
+	input c2,
+	input [11:0] fnum,
+	input [2:0] block,
+	input dt_sign_1,
+	input dt_sign_2,
+	input [4:0] dt_value,
+	input [3:0] multi,
+	input pg_reset,
+	input [7:0] reg_21,
+	input fsm_sel2,
+	output [9:0] pg_out,
+	output pg_dbg_o
+	);
+
+	// STAGE 2: shared rising-edge-of-c2 capture pulse for collapsed cells
+	reg c2_prev = 1'h0;
+	wire c2r = c2 & ~c2_prev;
+	always @(posedge MCLK) c2_prev <= c2;
+	
+	wire [2:0] block_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(3)) block_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(block),
+		.data_out(block_sr_o)
+		);
+	
+	wire [2:0] block_l_o;
+	
+	ym_dlatch_1_opt #(.DATA_WIDTH(3)) block_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(block_sr_o),
+		.val(block_l_o),
+		.nval()
+		);
+	
+	wire block_sh0 = block_l_o[1:0] == 2'h0;
+	wire block_sh1 = block_l_o[1:0] == 2'h1;
+	wire block_sh2 = block_l_o[1:0] == 2'h2;
+	wire block_sh3 = block_l_o[1:0] == 2'h3;
+	
+	wire [12:0] freq1 = { fnum, 1'h0 };
+	
+	wire [15:0] freq2 = ({16{block_sh0}} & { 3'h0, freq1 })
+		| ({16{block_sh1}} & { 2'h0, freq1, 1'h0 })
+		| ({16{block_sh2}} & { 1'h0, freq1, 2'h0 })
+		| ({16{block_sh3}} & { freq1, 3'h0 });
+	
+	wire [16:0] freq3 = ~(
+		({17{~block_l_o[2]}} & { 4'h0, freq2[15:3] })
+		| ({17{block_l_o[2]}} & { freq2, 1'h0 })
+		);
+	
+	wire [16:0] freq_l_o;
+	
+	ym_dlatch_2_opt #(.DATA_WIDTH(17)) freq_l
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(freq3),
+		.val(),
+		.nval(freq_l_o)
+		);
+	
+	wire [4:0] dt_value_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(5)) dt_value_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(dt_value ^ {5{dt_sign_1}}),
+		.data_out(dt_value_sr_o)
+		);
+	
+	wire [16:0] dt_add = { {12{dt_sign_2}}, dt_value_sr_o };
+	
+	wire [16:0] freq_dt = freq_l_o + dt_add + dt_sign_2;
+	
+	wire [16:0] freq_l2_o;
+	
+	ym_dlatch_1_opt #(.DATA_WIDTH(17)) freq_l2
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(freq_dt),
+		.val(freq_l2_o),
+		.nval()
+		);
+	
+	wire [15:0] multi_sel;
+	
+	genvar i;
+	
+	generate
+		for (i = 0; i < 16; i = i + 1)
+		begin : l1
+			assign multi_sel[i] = multi == i;
+		end
+	endgenerate
+	
+	wire multi_sel_1_l_o;
+	
+	ym_dlatch_1_opt multi_sel_1_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(multi_sel[14] | multi_sel[15]),
+		.val(multi_sel_1_l_o),
+		.nval()
+		);
+	
+	wire multi_sel_2_l_o;
+	
+	ym_dlatch_1_opt multi_sel_2_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(multi_sel[8] | multi_sel[9] | multi_sel[10] | multi_sel[11] | multi_sel[12] | multi_sel[13]),
+		.val(multi_sel_2_l_o),
+		.nval()
+		);
+	
+	wire multi_sel_3_l_o;
+	
+	ym_dlatch_1_opt multi_sel_3_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(multi_sel[4] | multi_sel[5] | multi_sel[6] | multi_sel[7]),
+		.val(multi_sel_3_l_o),
+		.nval()
+		);
+	
+	wire multi_sel_4_l_o;
+	
+	ym_dlatch_1_opt multi_sel_4_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(multi_sel[1] | multi_sel[3] | multi_sel[5] | multi_sel[7] | multi_sel[9] | multi_sel[11] | multi_sel[13]),
+		.val(multi_sel_4_l_o),
+		.nval()
+		);
+	
+	wire multi_sel_5_l_o;
+	
+	ym_dlatch_1_opt multi_sel_5_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(multi_sel[12] | multi_sel[13]),
+		.val(multi_sel_5_l_o),
+		.nval()
+		);
+	
+	wire multi_sel_6_l_o;
+	
+	ym_dlatch_1_opt multi_sel_6_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(multi_sel[14]),
+		.val(multi_sel_6_l_o),
+		.nval()
+		);
+	
+	wire multi_sel_7_l_o;
+	
+	ym_dlatch_1_opt multi_sel_7_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(multi_sel[2] | multi_sel[3] | multi_sel[6] | multi_sel[7] | multi_sel[10] | multi_sel[11]),
+		.val(multi_sel_7_l_o),
+		.nval()
+		);
+	
+	wire multi_sel_8_l_o;
+	
+	ym_dlatch_1_opt multi_sel_8_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(multi_sel[15]),
+		.val(multi_sel_8_l_o),
+		.nval()
+		);
+	
+	wire multi_sel_9_l_o;
+	
+	ym_dlatch_1_opt multi_sel_9_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(multi_sel[0]),
+		.val(multi_sel_9_l_o),
+		.nval()
+		);
+	
+	wire [19:0] freq_multi_add1 = ~(
+		({20{multi_sel_5_l_o}} & { 1'h0, freq_l2_o, 2'h0 })
+		| ({20{multi_sel_6_l_o}} & { 2'h3, ~freq_l2_o, 1'h1 })
+		| ({20{multi_sel_7_l_o}} & { 2'h0, freq_l2_o, 1'h0 })
+		| ({20{multi_sel_8_l_o}} & { 3'h7, ~freq_l2_o })
+		| ({20{multi_sel_9_l_o}} & { 4'h0, freq_l2_o[16:1] })
+		);
+	
+	wire [17:0] freq_multi_add2 = ~(
+		({18{multi_sel_3_l_o}} & { 1'h0, freq_l2_o })
+		| ({18{multi_sel_2_l_o}} & { freq_l2_o, 1'h0 })
+		| ({18{multi_sel_1_l_o}} & { freq_l2_o[15:0], 2'h0 })
+		);
+	
+	wire [19:0] freq_multi_add1_l_o;
+	
+	ym_dlatch_2_opt #(.DATA_WIDTH(20)) freq_multi_add1_l
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(freq_multi_add1),
+		.val(),
+		.nval(freq_multi_add1_l_o)
+		);
+	
+	wire [17:0] freq_multi_add2_l_o;
+	
+	ym_dlatch_2_opt #(.DATA_WIDTH(18)) freq_multi_add2_l
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(freq_multi_add2),
+		.val(),
+		.nval(freq_multi_add2_l_o)
+		);
+		
+	wire multi_c_in;
+	
+	ym_dlatch_2_opt multi_c_in_l
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(~(multi_sel_6_l_o | multi_sel_8_l_o)),
+		.val(),
+		.nval(multi_c_in)
+		);
+	
+	wire [19:0] freq_multi_sum = freq_multi_add1_l_o + { freq_multi_add2_l_o, 2'h0 } + multi_c_in;
+	wire [19:0] freq_multi_sum_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(20)) freq_multi_sum_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(freq_multi_sum),
+		.data_out(freq_multi_sum_sr_o)
+		);
+	
+	wire [16:0] freq_multi_add3_l_o;
+	
+	ym_dlatch_2_opt #(.DATA_WIDTH(17)) freq_multi_add3_l
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(freq_l2_o),
+		.val(freq_multi_add3_l_o),
+		.nval()
+		);
+	
+	wire [19:0] freq_multi_add3_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(20)) freq_multi_add3_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in({3'h0, freq_multi_add3_l_o}),
+		.data_out(freq_multi_add3_sr_o)
+		);
+	
+	wire multi_sel_4_l2_o;
+	
+	ym_dlatch_2_opt multi_sel_4_l2
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(multi_sel_4_l_o),
+		.val(multi_sel_4_l2_o),
+		.nval()
+		);
+	
+	wire multi_sel_4_sr_o;
+	
+	ym_sr_bit_opt multi_sel_4_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(multi_sel_4_l2_o),
+		.sr_out(multi_sel_4_sr_o)
+		);
+	
+	wire multi_sel_4_sr_o_r = multi_sel_4_sr_o & pg_reset;
+	
+	wire [19:0] freq_multi_add3_l2_o;
+	
+	ym_dlatch_1_opt #(.DATA_WIDTH(20)) freq_multi_add3_l2
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(~(multi_sel_4_sr_o_r ? freq_multi_add3_sr_o : 20'h00000)),
+		.val(),
+		.nval(freq_multi_add3_l2_o)
+		);
+	
+	wire [19:0] freq_multi_sum_l_o;
+	
+	ym_dlatch_1_opt #(.DATA_WIDTH(20)) freq_multi_sum_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(~(pg_reset ? freq_multi_sum_sr_o : 20'h00000)),
+		.val(),
+		.nval(freq_multi_sum_l_o)
+		);
+	
+	wire [19:0] freq_inc = freq_multi_sum_l_o + freq_multi_add3_l2_o;
+	wire [19:0] freq_inc_l_o;
+	
+	ym_dlatch_2_opt #(.DATA_WIDTH(20)) freq_inc_l
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(freq_inc),
+		.val(freq_inc_l_o),
+		.nval()
+		);
+	
+	wire pg_reset_sr_o;
+	
+	ym_sr_bit_opt pg_reset_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(pg_reset),
+		.sr_out(pg_reset_sr_o)
+		);
+	
+	wire pg_reset2 = pg_reset_sr_o & ~reg_21[3];
+	
+	wire [19:0] o_phase;
+	
+	wire [19:0] phase = (pg_reset2 ? o_phase : 20'h00000) + freq_inc_l_o;
+	
+	wire [19:0] pg_values_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(20), .SR_LENGTH(20)) pg_values
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(phase),
+		.data_out(pg_values_o)
+		);
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(20), .SR_LENGTH(4)) pg_values2
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(pg_values_o),
+		.data_out(o_phase)
+		);
+	
+	assign pg_out = pg_values_o[19:10];
+	
+	ym_dbg_read_opt #(.DATA_WIDTH(10)) dbg_read
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.prev(0),
+		.load(fsm_sel2),
+		.load_val(o_phase[9:0]),
+		.next(pg_dbg_o)
+		);
+
+endmodule
+// ==== from ym3438_eg.v ====
+module ym3438_eg_opt
+	(
+	input MCLK,
+	input c1,
+	input c2,
+	input fsm_sel0,
+	input IC,
+	input TEST_i,
+	input [7:0] lsi_21,
+	input [7:3] lsi_2c,
+	input [4:0] rate,
+	input [4:0] kcode,
+	input [1:0] ks,
+	input [4:0] sl,
+	input kon,
+	input ssg_enable,
+	input ssg_inv,
+	input ssg_repeat,
+	input ssg_holdup,
+	input ssg_type0,
+	input ssg_type2,
+	input ssg_type3,
+	input csm_kon,
+	input [6:0] tl,
+	input [1:0] ams,
+	input [5:0] lfo_am,
+	input mode_csm,
+	input ch3_sel,
+	input fsm_sel2,
+	output [1:0] rate_sel,
+	output pg_reset,
+	output test_inc,
+	output [9:0] eg_out,
+	output eg_dbg
+	);
+
+	// STAGE 2: shared rising-edge-of-c2 capture pulse for collapsed cells
+	reg c2_prev = 1'h0;
+	wire c2r = c2 & ~c2_prev;
+	always @(posedge MCLK) c2_prev <= c2;
+	
+	wire nIC = ~IC;
+	
+	wire fsm_sel1;
+	
+	ym_sr_bit_opt fsm_sel1_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(fsm_sel0),
+		.sr_out(fsm_sel1)
+		);
+	
+	wire fsm_sel12;
+	
+	ym_sr_bit_opt #(.SR_LENGTH(12)) fsm_sel12_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(fsm_sel0),
+		.sr_out(fsm_sel12)
+		);
+	
+	wire subcnt_rst;
+	wire [1:0] subcnt_o;
+	
+	ym_cnt_bit_opt #(.DATA_WIDTH(2), .KEEP(1)) subcnt
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.c_in(fsm_sel0),
+		.reset(subcnt_rst),
+		.val(subcnt_o),
+		.c_out()
+		);
+	
+	assign subcnt_rst = nIC | (subcnt_o[1] & fsm_sel0);
+	
+	wire subcnt_of_l_o;
+	
+	ym_dlatch_1_opt subcnt_of_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(subcnt_o[1]),
+		.val(subcnt_of_l_o),
+		.nval()
+		);
+	
+	wire subcnt_of_sr_o;
+	
+	ym_sr_bit_opt subcnt_of_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(subcnt_o[1]),
+		.sr_out(subcnt_of_sr_o)
+		);
+	
+	wire timer_bit;
+	
+	wire mask_bit_sr_o;
+	
+	wire mask_bit = ~(fsm_sel0 | fsm_sel12 | nIC) & (mask_bit_sr_o | timer_bit);
+	
+	ym_sr_bit_opt #(.KEEP(1)) mask_bit_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(mask_bit),
+		.sr_out(mask_bit_sr_o)
+		);
+	
+	wire eg_timer_i;
+	wire eg_timer_o1;
+	wire eg_timer_o2;
+	
+	ym_sr_bit_opt #(.SR_LENGTH(11), .KEEP(1)) eg_timer_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(eg_timer_i),
+		.sr_out(eg_timer_o1)
+		);
+	
+	ym_sr_bit_opt eg_timer_sr2
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(eg_timer_o1),
+		.sr_out(eg_timer_o2)
+		);
+	
+	wire carry_sr_i;
+	wire carry_sr_o;
+	
+	ym_sr_bit_opt carry_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(carry_sr_i),
+		.sr_out(carry_sr_o)
+		);
+		
+	wire timer_add = (fsm_sel1 & subcnt_o[1]) | carry_sr_o;
+	
+	wire [1:0] timer_ha = eg_timer_o2 + timer_add;
+	
+	assign carry_sr_i = timer_ha[1];
+	
+	assign eg_timer_i = ~(nIC | lsi_21[5]) & timer_ha[0];
+	
+	wire test_in = (TEST_i & lsi_2c[6]);
+	
+	assign timer_bit = test_in | eg_timer_i;
+	
+	wire timer_bit_masked = timer_bit & ~mask_bit_sr_o;
+	
+	wire [11:0] timer_shift_sel;
+	wire [11:0] timer_shift_i;
+	
+	genvar i;
+	generate
+		for (i = 11; i >= 0; i = i - 1)
+		begin : l1
+			
+			if (i == 11)
+				assign timer_shift_i[i] = timer_bit_masked;
+			else
+				assign timer_shift_i[i] = timer_shift_sel[i+1];
+
+			// Stage 11 samples timer_bit_masked, which carries the async TEST_i
+			// (test_in) and nIC via eg_timer_i -> phase-varying -> KEEP.  Stages
+			// 0..10 are pure chains (timer_shift_sel[i+1]) -> collapse.
+			ym_sr_bit_opt #(.KEEP(i == 11)) timer_shift_sr
+				(
+				.MCLK(MCLK),
+				.c1(c1),
+				.c2(c2),
+		.c2r(c2r),
+				.bit_in(timer_shift_i[i]),
+				.sr_out(timer_shift_sel[i])
+				);
+		end
+	endgenerate
+	
+	wire eg_cnt_ed_o;
+	
+	ym_edge_detect_opt eg_cnt_ed
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(subcnt_of_sr_o & fsm_sel1),
+		.outp(eg_cnt_ed_o)
+		);
+	
+	wire [1:0] eg_cnt_low_o;
+		
+	ym_slatch_opt #(.DATA_WIDTH(2)) eg_cnt_low
+		(
+		.MCLK(MCLK),
+		.en(eg_cnt_ed_o),
+		.inp({ eg_timer_o1, eg_timer_o2}),
+		.val(eg_cnt_low_o),
+		.nval()
+		);
+	
+	wire [3:0] eg_cnt_shift_i;
+	
+	assign eg_cnt_shift_i[0] = timer_shift_sel[0] | timer_shift_sel[2] | timer_shift_sel[4]
+		| timer_shift_sel[6] | timer_shift_sel[8] | timer_shift_sel[10];
+	assign eg_cnt_shift_i[1] = timer_shift_sel[1] | timer_shift_sel[2] | timer_shift_sel[5]
+		| timer_shift_sel[6] | timer_shift_sel[9] | timer_shift_sel[10];
+	assign eg_cnt_shift_i[2] = timer_shift_sel[3] | timer_shift_sel[4] | timer_shift_sel[5]
+		| timer_shift_sel[6] | timer_shift_sel[11];
+	assign eg_cnt_shift_i[3] = timer_shift_sel[7] | timer_shift_sel[8] | timer_shift_sel[9]
+		| timer_shift_sel[10] | timer_shift_sel[11];
+	
+	wire [3:0] eg_cnt_shift_o;
+		
+	ym_slatch_opt #(.DATA_WIDTH(4)) eg_cnt_shift
+		(
+		.MCLK(MCLK),
+		.en(eg_cnt_ed_o),
+		.inp(eg_cnt_shift_i),
+		.val(eg_cnt_shift_o),
+		.nval()
+		);
+	
+	wire rate_nz_sr_o;
+	
+	ym_sr_bit_opt rate_nz_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(rate != 5'h0),
+		.sr_out(rate_nz_sr_o)
+		);
+	
+	wire [4:0] rate_l_o; // ~eg_rate
+	
+	ym_dlatch_1_opt #(.DATA_WIDTH(5)) rate_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(rate),
+		.val(),
+		.nval(rate_l_o)
+		);
+	
+	wire [4:0] rate_ks_add;
+	
+	assign rate_ks_add[0] = ((ks == 2'h0) & kcode[3]) | ((ks == 2'h1) & kcode[2]) | ((ks == 2'h2) & kcode[1]) | ((ks == 2'h3) & kcode[0]);
+	assign rate_ks_add[1] = ((ks == 2'h0) & kcode[4]) | ((ks == 2'h1) & kcode[3]) | ((ks == 2'h2) & kcode[2]) | ((ks == 2'h3) & kcode[1]);
+	assign rate_ks_add[2] = ((ks == 2'h1) & kcode[4]) | ((ks == 2'h2) & kcode[3]) | ((ks == 2'h3) & kcode[2]);
+	assign rate_ks_add[3] = ((ks == 2'h2) & kcode[4]) | ((ks == 2'h3) & kcode[3]);
+	assign rate_ks_add[4] = ((ks == 2'h3) & kcode[4]);
+	
+	wire [4:0] rate_ks_add_l_o; // ~eg_ksv
+	
+	ym_dlatch_1_opt #(.DATA_WIDTH(5)) rate_ks_add_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(rate_ks_add),
+		.val(),
+		.nval(rate_ks_add_l_o)
+		);
+	
+	wire [6:0] rate_sum = { 1'h0, rate_l_o, 1'h1 } + { 2'h1, rate_ks_add_l_o } + 7'h1;
+	
+	wire [6:0] rate_sum_l_o; // eg_rate2
+	
+	ym_dlatch_2_opt #(.DATA_WIDTH(7)) rate_sum_l
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(rate_sum),
+		.val(),
+		.nval(rate_sum_l_o)
+		);
+	
+	wire [5:0] rate_sum_clamp = rate_sum_l_o[5:0] | {6{rate_sum_l_o[6]}};
+	
+	wire rate_ls12 = rate_sum_clamp[5:4] != 2'h3;
+	wire rate_sum_nz = rate_sum_clamp != 6'h00;
+	
+	wire [3:0] rate_shift_sum = rate_sum_clamp[5:2] + eg_cnt_shift_o;
+	
+	wire step_12 = rate_shift_sum == 4'hc & rate_sum_nz & rate_nz_sr_o & rate_ls12;
+	wire step_13 = rate_shift_sum == 4'hd & rate_sum_clamp[1] & rate_nz_sr_o & rate_ls12;
+	wire step_14 = rate_shift_sum == 4'he & rate_sum_clamp[0] & rate_nz_sr_o & rate_ls12;
+	
+	wire step_comb = ~(step_12 | step_13 | step_14);
+	
+	wire step_low_l_o; // eg_inc1
+	
+	ym_dlatch_1_opt step_low_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(step_comb),
+		.val(),
+		.nval(step_low_l_o)
+		);
+	
+	wire rate_sum_not_max = rate_sum_clamp[5:1] != 5'h1f;
+	wire rate_sum_12 = rate_sum_clamp[5:2] != 4'hc;
+	wire rate_sum_13 = rate_sum_clamp[5:2] != 4'hd;
+	wire rate_sum_14 = rate_sum_clamp[5:2] != 4'he;
+	wire rate_sum_15 = rate_sum_clamp[5:2] != 4'hf;
+	
+	wire rate_not_max_sr_o; // ~eg_maxrate[1]
+	
+	ym_sr_bit_opt rate_not_max_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(rate_sum_not_max),
+		.sr_out(rate_not_max_sr_o)
+		);
+	
+	wire rate_12_l_o; // eg_rate12
+	wire rate_13_l_o; // eg_rate13
+	wire rate_14_l_o; // eg_rate14
+	wire rate_15_l_o; // eg_rate15
+	
+	ym_dlatch_1_opt rate_12_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(rate_sum_12),
+		.val(),
+		.nval(rate_12_l_o)
+		);
+	
+	ym_dlatch_1_opt rate_13_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(rate_sum_13),
+		.val(),
+		.nval(rate_13_l_o)
+		);
+	
+	ym_dlatch_1_opt rate_14_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(rate_sum_14),
+		.val(),
+		.nval(rate_14_l_o)
+		);
+	
+	ym_dlatch_1_opt rate_15_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(rate_sum_15),
+		.val(),
+		.nval(rate_15_l_o)
+		);
+	
+	wire rate_hi_sel = ~(
+		(~eg_cnt_low_o[0] & rate_sum_clamp[1])
+		| (eg_cnt_low_o == 2'h0 & rate_sum_clamp[1:0] == 2'h1)
+		| (eg_cnt_low_o == 2'h1 & rate_sum_clamp[1:0] == 2'h3)
+		);
+	
+	wire rate_hi_sel_l_o; // eg_inc2
+	
+	ym_dlatch_1_opt rate_hi_sel_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(rate_hi_sel),
+		.val(),
+		.nval(rate_hi_sel_l_o)
+		);
+	
+	wire inc1 = subcnt_of_l_o & (step_low_l_o | (~rate_hi_sel_l_o & rate_12_l_o));
+	wire inc2 = subcnt_of_l_o & (rate_hi_sel_l_o ? rate_12_l_o : rate_13_l_o);
+	wire inc3 = subcnt_of_l_o & (rate_hi_sel_l_o ? rate_13_l_o : rate_14_l_o);
+	wire inc4 = subcnt_of_l_o & ((rate_hi_sel_l_o & rate_14_l_o) | rate_15_l_o);
+	
+	wire inc1_l_o;
+	wire inc2_l_o;
+	wire inc3_l_o;
+	wire inc4_l_o;
+	
+	ym_dlatch_2_opt inc1_l
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(inc1),
+		.val(inc1_l_o),
+		.nval()
+		);
+	
+	ym_dlatch_2_opt inc2_l
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(inc2),
+		.val(inc2_l_o),
+		.nval()
+		);
+	
+	ym_dlatch_2_opt inc3_l
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(inc3),
+		.val(inc3_l_o),
+		.nval()
+		);
+	
+	ym_dlatch_2_opt inc4_l
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(inc4),
+		.val(inc4_l_o),
+		.nval()
+		);
+	
+	wire inc_test_i = inc1_l_o | inc2_l_o | inc3_l_o | inc4_l_o;
+	
+	ym_sr_bit_opt inc_test_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(inc_test_i),
+		.sr_out(test_inc)
+		);
+	
+	wire [4:0] sl_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(5), .SR_LENGTH(2)) sl_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(sl),
+		.data_out(sl_sr_o)
+		);
+		
+
+	wire ssg_pg_reset;
+	wire ssg_pg_reset_o;
+	
+	ym_sr_bit_opt #(.SR_LENGTH(2)) ssg_pg_reset_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(ssg_pg_reset),
+		.sr_out(ssg_pg_reset_o)
+		);
+		
+	wire ssg_toggle;
+	wire ssg_toggle_o;
+	
+	ym_sr_bit_opt #(.SR_LENGTH(2)) ssg_toggle_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(ssg_toggle),
+		.sr_out(ssg_toggle_o)
+		);
+		
+	wire ssg_enable_o;
+	
+	ym_sr_bit_opt #(.SR_LENGTH(2)) ssg_enable_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(ssg_enable),
+		.sr_out(ssg_enable_o)
+		);
+		
+	wire ssg_holdup_i = ~(ssg_holdup & ssg_enable & kon);
+	wire ssg_holdup_o;
+	
+	ym_sr_bit_opt #(.SR_LENGTH(2)) ssg_holdup_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(ssg_holdup_i),
+		.sr_out(ssg_holdup_o)
+		);
+	
+	wire ssg_inv_i;
+	wire ssg_inv_o;
+	
+	ym_sr_bit_opt #(.SR_LENGTH(24)) ssg_inv_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(ssg_inv_i),
+		.sr_out(ssg_inv_o)
+		);
+	
+	wire csm_kon_o;
+	ym_sr_bit_opt #(.SR_LENGTH(2)) csm_kon_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(csm_kon),
+		.sr_out(csm_kon_o)
+		);
+	
+	wire [6:0] tl_o;
+	wire [6:0] tl_o1;
+	ym_sr_bit_array_opt #(.DATA_WIDTH(7)) tl_sr_1
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(tl),
+		.data_out(tl_o)
+		);
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(7)) tl_sr_2
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(tl_o),
+		.data_out(tl_o1)
+		);
+	
+	wire pg_reset_i;
+	ym_sr_bit_opt #(.SR_LENGTH(2)) pg_reset_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(pg_reset_i),
+		.sr_out(pg_reset)
+		);
+		
+	wire kon_sr_o;
+	
+	ym_sr_bit_opt #(.SR_LENGTH(2)) kon_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(kon),
+		.sr_out(kon_sr_o)
+		);
+	
+	wire okon_sr1_o; // okon2
+	wire okon_sr_o; // okon
+	
+	ym_sr_bit_opt #(.SR_LENGTH(22)) okon_sr1
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(kon_sr_o),
+		.sr_out(okon_sr1_o)
+		);
+	
+	ym_sr_bit_opt #(.SR_LENGTH(2)) okon_sr2
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(okon_sr1_o),
+		.sr_out(okon_sr_o)
+		);
+	
+	wire [1:0] state_sr_i;
+	wire [1:0] state_sr1_o;
+	wire [1:0] state_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(2), .SR_LENGTH(22), .KEEP(1)) state_sr1
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(state_sr_i),
+		.data_out(state_sr1_o)
+		);
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(2), .SR_LENGTH(2)) state_sr2
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(state_sr1_o),
+		.data_out(state_sr_o)
+		);
+	
+	
+	wire [9:0] eg_level_sr_i;
+	wire [9:0] eg_level_sr_o1;
+	wire [9:0] eg_level_sr_o;
+	
+	wire [9:0] eg_level2;
+	
+	wire sl_reach = eg_level2[9:5] == sl_sr_o & eg_level2[4] == 1'h0;
+	wire zr_reach = eg_level2 == 10'h0;
+	wire eg_quiet = eg_level2[9:4] == 6'h3f;
+	wire eg_quiet_ssg = ssg_enable_o ? eg_level2[9] : eg_quiet;
+	
+	assign ssg_pg_reset = ssg_enable & eg_level_sr_o1[9] & ssg_type0;
+	assign ssg_toggle = ssg_enable & eg_level_sr_o1[9] & ssg_repeat;
+	
+	assign ssg_inv_i = ssg_enable & okon_sr1_o
+		& ((eg_level_sr_o1[9] & ssg_type3) | ((eg_level_sr_o1[9] & ssg_type2) ^ ssg_inv_o));
+	
+	wire kon_toggle = kon_sr_o & ~okon_sr_o;
+	wire kon_toggle_off = ~kon_sr_o & okon_sr_o;
+	
+	wire kon_event_n = ~(kon_toggle | (okon_sr_o & ssg_toggle_o));
+	
+	assign pg_reset_i = ~(kon_toggle | ssg_pg_reset_o);
+	
+	wire rate_att = ~(okon_sr1_o ? ssg_toggle : kon);
+	
+	assign rate_sel = rate_att ? state_sr1_o : 2'h0;
+	
+	wire set_release = state_sr_o == 2'h3 & kon_event_n;
+	wire set_release_koff = kon_event_n & ~kon_sr_o;
+	wire eg_mute = nIC | (eg_quiet_ssg & state_sr_o != 2'h0 & ssg_holdup_o & kon_event_n);
+	
+	assign state_sr_i[0] = nIC
+		| (state_sr_o == 2'h0 & zr_reach & kon_event_n)
+		| (state_sr_o == 2'h1 & ~sl_reach & kon_event_n)
+		| set_release
+		| eg_mute
+		| set_release_koff;
+	assign state_sr_i[1] = nIC
+		| (state_sr_o == 2'h1 & sl_reach & kon_event_n)
+		| (state_sr_o == 2'h2 & kon_event_n)
+		| set_release
+		| eg_mute
+		| set_release_koff;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(10), .SR_LENGTH(21)) eg_level_sr1
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(eg_level_sr_i),
+		.data_out(eg_level_sr_o1)
+		);
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(10), .SR_LENGTH(2)) eg_level_sr2
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(eg_level_sr_o1),
+		.data_out(eg_level_sr_o)
+		);
+		
+	wire [9:0] eg_level_out_sr2_o;
+	
+	assign eg_level2 = kon_toggle_off ? eg_level_out_sr2_o : eg_level_sr_o;
+	
+	wire eg_linear_step = (kon_event_n & state_sr_o == 2'h1 & ~sl_reach & ~eg_quiet_ssg)
+		| (kon_event_n & state_sr_o[1] & ~eg_quiet_ssg);
+	
+	wire eg_exp_step = state_sr_o == 2'h0 & kon_sr_o & ~zr_reach & rate_not_max_sr_o;
+	
+	wire eg_instantattack = (~rate_not_max_sr_o & kon_event_n) | rate_not_max_sr_o;
+	
+	wire eg_invert;
+	
+	ym_sr_bit_opt eg_invert_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(okon_sr1_o & (ssg_inv ^ ssg_inv_o)),
+		.sr_out(eg_invert)
+		);
+	
+	wire [3:0] eg_add_linear_normal;
+	
+	assign eg_add_linear_normal[0] = eg_linear_step & ~ssg_enable_o & inc1_l_o;
+	assign eg_add_linear_normal[1] = eg_linear_step & ~ssg_enable_o & inc2_l_o;
+	assign eg_add_linear_normal[2] = eg_linear_step & ~ssg_enable_o & inc3_l_o;
+	assign eg_add_linear_normal[3] = eg_linear_step & ~ssg_enable_o & inc4_l_o;
+	
+	wire [3:0] eg_add_linear_ssg;
+	
+	assign eg_add_linear_ssg[0] = eg_linear_step & ssg_enable_o & inc1_l_o;
+	assign eg_add_linear_ssg[1] = eg_linear_step & ssg_enable_o & inc2_l_o;
+	assign eg_add_linear_ssg[2] = eg_linear_step & ssg_enable_o & inc3_l_o;
+	assign eg_add_linear_ssg[3] = eg_linear_step & ssg_enable_o & inc4_l_o;
+	
+	wire [9:0] eg_add_exponent_1 = { 4'hf, ~eg_level2[9:4] };
+	wire [9:0] eg_add_exponent_2 = { 3'h7, ~eg_level2[9:3] };
+	wire [9:0] eg_add_exponent_3 = { 2'h3, ~eg_level2[9:2] };
+	wire [9:0] eg_add_exponent_4 = { 1'h1, ~eg_level2[9:1] };
+	
+	wire [9:0] eg_add_comb = { 6'h0, eg_add_linear_normal } | { 4'h0, eg_add_linear_ssg, 2'h0 }
+		| ({10{inc1_l_o & eg_exp_step}} & eg_add_exponent_1)
+		| ({10{inc2_l_o & eg_exp_step}} & eg_add_exponent_2)
+		| ({10{inc3_l_o & eg_exp_step}} & eg_add_exponent_3)
+		| ({10{inc4_l_o & eg_exp_step}} & eg_add_exponent_4);
+	
+	wire [9:0] eg_add_l_o;
+	
+	ym_dlatch_1_opt #(.DATA_WIDTH(10)) eg_add_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(eg_add_comb),
+		.val(),
+		.nval(eg_add_l_o)
+		);
+	
+	wire [9:0] eg_level_comb;
+	
+	assign eg_level_comb = {10{eg_mute}} | ({10{eg_instantattack}} & eg_level2) | { ({7{csm_kon_o}} & tl_o1), 3'h0};
+	
+	wire [9:0] eg_level_comb_o;
+	
+	ym_dlatch_1_opt #(.DATA_WIDTH(10)) eg_level_comb_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(eg_level_comb),
+		.val(),
+		.nval(eg_level_comb_o)
+		);
+		
+	wire [9:0] eg_level_sum = eg_add_l_o + eg_level_comb_o + 10'h1;
+	
+	ym_dlatch_2_opt #(.DATA_WIDTH(10)) eg_level_sum_l
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(eg_level_sum),
+		.val(),
+		.nval(eg_level_sr_i)
+		);
+	
+	wire [9:0] eg_level_out_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(10)) eg_level_out_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(eg_level_sr_o1),
+		.data_out(eg_level_out_sr_o)
+		);
+	
+	wire [9:0] eg_level_outinv_l1_o;
+	
+	ym_dlatch_1_opt #(.DATA_WIDTH(10)) eg_level_outinv_l1
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(eg_level_sr_o1),
+		.val(),
+		.nval(eg_level_outinv_l1_o)
+		);
+	
+	wire [9:0] eg_level_outinv_l2_i = eg_level_outinv_l1_o + 10'h201;
+	wire [9:0] eg_level_outinv_l2_o;
+	
+	ym_dlatch_2_opt #(.DATA_WIDTH(10)) eg_level_outinv_l2
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(eg_level_outinv_l2_i),
+		.val(eg_level_outinv_l2_o),
+		.nval()
+		);
+	
+	wire [9:0] eg_level_out = eg_invert ? eg_level_outinv_l2_o : eg_level_out_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(10)) eg_level_out_sr2
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(eg_level_out),
+		.data_out(eg_level_out_sr2_o)
+		);
+	
+	wire [9:0] eg_level_out_test = lsi_21[5] ? 10'h0 : eg_level_out;
+	
+	wire [6:0] eg_lfo_mux;
+	
+	wire [1:0] ams_l_o;
+	
+	ym_dlatch_1_opt #(.DATA_WIDTH(2)) ams_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(ams),
+		.val(ams_l_o),
+		.nval()
+		);
+	
+	wire [5:0] lfo_am_l_o;
+	
+	ym_dlatch_1_opt #(.DATA_WIDTH(6)) lfo_am_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(lfo_am),
+		.val(lfo_am_l_o),
+		.nval()
+		);
+	
+	wire [3:0] ams_sel;
+	assign ams_sel[0] = ams_l_o == 2'h0;
+	assign ams_sel[1] = ams_l_o == 2'h1;
+	assign ams_sel[2] = ams_l_o == 2'h2;
+	assign ams_sel[3] = ams_l_o == 2'h3;
+	
+	wire [6:0] lfo_sh0 = { 3'h0, lfo_am_l_o[5:2] };
+	wire [6:0] lfo_sh1 = { 2'h0, lfo_am_l_o[5:1] };
+	wire [6:0] lfo_sh2 = { 1'h0, lfo_am_l_o };
+	wire [6:0] lfo_sh3 = { lfo_am_l_o, 1'h0 };
+	
+	assign eg_lfo_mux = ~(
+		({7{ams_sel[1]}} & lfo_sh0)
+		| ({7{ams_sel[2]}} & lfo_sh2)
+		| ({7{ams_sel[3]}} & lfo_sh3)
+		);
+	
+	wire [6:0] eg_lfo_mux_l_o;
+	
+	ym_dlatch_2_opt #(.DATA_WIDTH(7)) eg_lfo_mux_l
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(eg_lfo_mux),
+		.val(),
+		.nval(eg_lfo_mux_l_o)
+		);
+	
+	wire [10:0] eg_level_lfo = { 4'h0, eg_lfo_mux_l_o } + { 1'h0, eg_level_out_test };
+	//wire [10:0] eg_level_lfo = eg_level_out_test;
+	wire [10:0] eg_level_lfo_l_o;
+	
+	ym_dlatch_1_opt #(.DATA_WIDTH(11)) eg_level_lfo_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(eg_level_lfo),
+		.val(),
+		.nval(eg_level_lfo_l_o)
+		);
+	
+	wire ch3_sel_sr_o;
+	
+	ym_sr_bit_opt ch3_sel_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(ch3_sel),
+		.sr_out(ch3_sel_sr_o)
+		);
+	
+	wire not_csm = ~(mode_csm & ch3_sel_sr_o);
+		
+	wire [6:0] tl_add_l_i = not_csm ? tl_o : 7'h0;
+	wire [6:0] tl_add_l_o;
+	
+	ym_dlatch_1_opt #(.DATA_WIDTH(7)) tl_add_l
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(tl_add_l_i),
+		.val(),
+		.nval(tl_add_l_o)
+		);
+	
+	wire [10:0] eg_level_tl = { 1'h0, eg_level_lfo_l_o[9:0] } + { 1'h0, tl_add_l_o, 3'h0 } + 11'h8;
+	//wire [10:0] eg_level_tl = eg_level_lfo_l_o[9:0];
+	
+	wire eg_level_of = eg_level_tl[10] & eg_level_lfo_l_o[10];
+	//wire eg_level_of = 1'h1;
+	
+	wire [9:0] eg_level_tl_clamp = eg_level_of ? eg_level_tl[9:0] : 10'h0;
+	
+	ym_dlatch_2_opt #(.DATA_WIDTH(10)) eg_out_l
+		(
+		.MCLK(MCLK),
+		.c2(c2),
+		.c2r(c2r),
+		.inp(eg_level_tl_clamp),
+		.val(),
+		.nval(eg_out)
+		);
+	
+	ym_dbg_read_eg_opt #(.DATA_WIDTH(10)) dbg_read
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.prev(0),
+		.load(fsm_sel2),
+		.load_val(eg_out),
+		.next(eg_dbg)
+		);
+	
+endmodule
+
+// ==== from ym3438_op.v ====
+module ym3438_op_opt
+	(
+	input MCLK,
+	input c1,
+	input c2,
+	input [9:0] pg_phase,
+	input [9:0] eg_att,
+	input [7:0] reg_21,
+	input is_op1,
+	input is_op2,
+	input add1_cur,
+	input add1_op1_2,
+	input add1_op2,
+	input add2_cur,
+	input add2_op1_1,
+	input no_fb,
+	input [2:0] fb,
+	output [13:0] op_output
+	);
+
+	// STAGE 2: shared rising-edge-of-c2 capture pulse for collapsed cells
+	reg c2_prev = 1'h0;
+	wire c2r = c2 & ~c2_prev;
+	always @(posedge MCLK) c2_prev <= c2;
+	
+	wire [9:0] mod_add;
+	
+	wire [9:0] phase_sum = mod_add + pg_phase;
+	
+	wire [9:0] phase_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(10)) phase_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(phase_sum),
+		.data_out(phase_sr_o)
+		);
+	
+	wire [7:0] sin_index = phase_sr_o[7:0] ^ {8{phase_sr_o[8]}};
+	
+	wire [4:0] sin_lut_index = sin_index[5:1];
+	
+	reg [45:0] sine_lut_out;
+	
+	always @(sin_lut_index)
+	begin
+		case (sin_lut_index)
+			5'h1f: sine_lut_out = 46'b0001100001000100100001000010101010101000100101;
+			5'h1e: sine_lut_out = 46'b0001100001010100001000000001001001001100010100;
+			5'h1d: sine_lut_out = 46'b0001100001010100001000110000101011001100000110;
+			5'h1c: sine_lut_out = 46'b0001110000010000000000110011001001001100100111;
+			5'h1b: sine_lut_out = 46'b0001110000010000011000000011101010001110010110;
+			5'h1a: sine_lut_out = 46'b0001110000010100010001100000001000101110100111;
+			5'h19: sine_lut_out = 46'b0001110000010100011001100001001011001110100101;
+			5'h18: sine_lut_out = 46'b0001110000011100001001010011101000101111001111;
+			5'h17: sine_lut_out = 46'b0001110001011000000001110010101110001101110111;
+			5'h16: sine_lut_out = 46'b0001110001011000101000111001100101011001101010;
+			5'h15: sine_lut_out = 46'b0001110001011100110000011011100100001010100111;
+			5'h14: sine_lut_out = 46'b0001110001011100111000111110100011001001110111;
+			5'h13: sine_lut_out = 46'b0100100010010000100001011100100000111001111011;
+			5'h12: sine_lut_out = 46'b0100100010010100100001001111000001111110100010;
+			5'h11: sine_lut_out = 46'b0100100010010100101001101111110110100101100100;
+			5'h10: sine_lut_out = 46'b0100100111000000010000011101000110101110010111;
+			5'h0f: sine_lut_out = 46'b0100100111000100010000101110001101001011111110;
+			5'h0e: sine_lut_out = 46'b0100100111001100001011011000001001011000011011;
+			5'h0d: sine_lut_out = 46'b0100110110001000001011101000001010111011111011;
+			5'h0c: sine_lut_out = 46'b0100110110001100010011011010111110110100011000;
+			5'h0b: sine_lut_out = 46'b0100110111001000110010111100101010001100010111;
+			5'h0a: sine_lut_out = 46'b0100110111001100110110110111110001010111110000;
+			5'h09: sine_lut_out = 46'b0111000100000000101111000101010101010101111001;
+			5'h08: sine_lut_out = 46'b0111000100000100101111110111011101010010111011;
+			5'h07: sine_lut_out = 46'b0111000101010101010100101000110000010010010001;
+			5'h06: sine_lut_out = 46'b0111010100011001001100011010011100010000101001;
+			5'h05: sine_lut_out = 46'b0111010101011011001001100100010000110100110010;
+			5'h04: sine_lut_out = 46'b1010000100011011011001011110010001110010101001;
+			5'h03: sine_lut_out = 46'b1010000101011111111100100101011100010010010011;
+			5'h02: sine_lut_out = 46'b1010010111110101100010001011110001010100001010;
+			5'h01: sine_lut_out = 46'b1011010110110011110111011000011100110000011010;
+			5'h00: sine_lut_out = 46'b1110011111010001110111100110011001110101111010;
+		endcase
+	end
+	
+	wire sin_index_top_sel[3:0];
+	assign sin_index_top_sel[0] = sin_index[7:6] == 2'h0;
+	assign sin_index_top_sel[1] = sin_index[7:6] == 2'h1;
+	assign sin_index_top_sel[2] = sin_index[7:6] == 2'h2;
+	assign sin_index_top_sel[3] = sin_index[7:6] == 2'h3;
+	
+	wire [18:0] sin_lut_mux;
+	
+	assign sin_lut_mux[0] = (sine_lut_out[0] & sin_index_top_sel[0]) | (sine_lut_out[1] & sin_index_top_sel[1])
+		| (sine_lut_out[2] & sin_index_top_sel[2]) | (sine_lut_out[3] & sin_index_top_sel[3]);
+	assign sin_lut_mux[1] = (sine_lut_out[4] & sin_index_top_sel[0]) | (sine_lut_out[5] & sin_index_top_sel[1])
+		| (sine_lut_out[6] & sin_index_top_sel[2]) | (sine_lut_out[7] & sin_index_top_sel[3]);
+	assign sin_lut_mux[2] = (sine_lut_out[8] & sin_index_top_sel[0]) | (sine_lut_out[9] & sin_index_top_sel[1])
+		| (sine_lut_out[10] & sin_index_top_sel[2]);
+	assign sin_lut_mux[3] = (sine_lut_out[11] & sin_index_top_sel[0]) | (sine_lut_out[12] & sin_index_top_sel[1])
+		| (sine_lut_out[13] & sin_index_top_sel[2]) | (sine_lut_out[14] & sin_index_top_sel[3]);
+	assign sin_lut_mux[4] = (sine_lut_out[15] & sin_index_top_sel[0]) | (sine_lut_out[16] & sin_index_top_sel[1]);
+	assign sin_lut_mux[5] = (sine_lut_out[17] & sin_index_top_sel[0]) | (sine_lut_out[18] & sin_index_top_sel[1])
+		| (sine_lut_out[19] & sin_index_top_sel[2]) | (sine_lut_out[20] & sin_index_top_sel[3]);
+	assign sin_lut_mux[6] = sine_lut_out[21] & sin_index_top_sel[0];
+	assign sin_lut_mux[7] = (sine_lut_out[22] & sin_index_top_sel[0]) | (sine_lut_out[23] & sin_index_top_sel[1])
+		| (sine_lut_out[24] & sin_index_top_sel[2]) | (sine_lut_out[25] & sin_index_top_sel[3]);
+	assign sin_lut_mux[8] = sine_lut_out[26] & sin_index_top_sel[0];
+	assign sin_lut_mux[9] = (sine_lut_out[27] & sin_index_top_sel[0]) | (sine_lut_out[28] & sin_index_top_sel[1])
+		| (sine_lut_out[29] & sin_index_top_sel[2]) | (sine_lut_out[30] & sin_index_top_sel[3]);
+	assign sin_lut_mux[10] = sine_lut_out[31] & sin_index_top_sel[0];
+	assign sin_lut_mux[11] = (sine_lut_out[32] & sin_index_top_sel[0]) | (sine_lut_out[33] & sin_index_top_sel[1])
+		| (sine_lut_out[34] & sin_index_top_sel[2]);
+	assign sin_lut_mux[12] = sine_lut_out[35] & sin_index_top_sel[0];
+	assign sin_lut_mux[13] = (sine_lut_out[36] & sin_index_top_sel[0]) | (sine_lut_out[37] & sin_index_top_sel[1])
+		| (sine_lut_out[38] & sin_index_top_sel[2]);
+	assign sin_lut_mux[14] = sine_lut_out[39] & sin_index_top_sel[0];
+	assign sin_lut_mux[15] = (sine_lut_out[40] & sin_index_top_sel[0]) | (sine_lut_out[41] & sin_index_top_sel[1]);
+	assign sin_lut_mux[16] = (sine_lut_out[42] & sin_index_top_sel[0]) | (sine_lut_out[43] & sin_index_top_sel[1]);
+	assign sin_lut_mux[17] = sine_lut_out[44] & sin_index_top_sel[0];
+	assign sin_lut_mux[18] = sine_lut_out[45] & sin_index_top_sel[0];
+	
+	wire [18:0] sin_lut_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(19)) sin_lut_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(sin_lut_mux),
+		.data_out(sin_lut_sr_o)
+		);
+	
+	wire sin_index_0_sr_o;
+	
+	ym_sr_bit_opt sin_index_0_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(sin_index[0]),
+		.sr_out(sin_index_0_sr_o)
+		);
+	
+	wire [10:0] sin_base = { sin_lut_sr_o[18:15], sin_lut_sr_o[13], sin_lut_sr_o[11], sin_lut_sr_o[9], sin_lut_sr_o[7], sin_lut_sr_o[5], sin_lut_sr_o[3], sin_lut_sr_o[1] };
+	
+	wire [7:0] sin_delta = sin_index_0_sr_o ? 8'h0 : { sin_lut_sr_o[14], sin_lut_sr_o[12], sin_lut_sr_o[10], sin_lut_sr_o[8], sin_lut_sr_o[6], sin_lut_sr_o[4], sin_lut_sr_o[2], sin_lut_sr_o[0] };
+	
+	wire [11:0] sin_sum = sin_base + { sin_delta[7], sin_delta };
+	
+	wire sign_sr_o;
+	
+	ym_sr_bit_opt #(.SR_LENGTH(3)) sign_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(phase_sr_o[9]),
+		.sr_out(sign_sr_o)
+		);
+	
+	wire [9:0] eg_att_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(10)) eg_att_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(eg_att),
+		.data_out(eg_att_sr_o)
+		);
+
+	wire [12:0] att_sum = sin_sum + { eg_att_sr_o, 2'h0 };
+	//wire [12:0] att_sum = sin_sum + 100;
+	
+	wire [12:0] att_sum_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(13)) att_sum_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(att_sum),
+		.data_out(att_sum_sr_o)
+		);
+	
+	wire [11:0] att_clamp = ~(att_sum_sr_o[12] ? 12'hfff : att_sum_sr_o[11:0]);
+	
+	wire [7:0] pow_index = att_clamp[7:0];
+	
+	wire [4:0] pow_lut_index = pow_index[5:1];
+	
+	reg [47:0] pow_lut_out;
+	
+	always @(pow_lut_index)
+	begin
+		case (pow_lut_index)
+			5'h1f: pow_lut_out = 48'b111011111100011111101000111101000001000110011101;
+			5'h1e: pow_lut_out = 48'b111011111100011010011111011000001011100010110011;
+			5'h1d: pow_lut_out = 48'b111011111100000011110110111101101001110111011010;
+			5'h1c: pow_lut_out = 48'b111011111100000011100001111101100101000001010110;
+			5'h1b: pow_lut_out = 48'b111011111100000010000110011100100101000001011011;
+			5'h1a: pow_lut_out = 48'b111011101001010101011101111101000001111111011101;
+			5'h19: pow_lut_out = 48'b111011001011011101111010011111001000011011000000;
+			5'h18: pow_lut_out = 48'b111011001011011100100101111100001001001111011110;
+			5'h17: pow_lut_out = 48'b111011001011001101000110111101000001101011011010;
+			5'h16: pow_lut_out = 48'b111011001011000001110011011101110001010111010100;
+			5'h15: pow_lut_out = 48'b111011000011100010111100111100110001110110010101;
+			5'h14: pow_lut_out = 48'b111010000111110011001111011101111001110010011011;
+			5'h13: pow_lut_out = 48'b111010000111110011000000111001111011001110111101;
+			5'h12: pow_lut_out = 48'b111010000100111110110111111100110101101001010001;
+			5'h11: pow_lut_out = 48'b111010000100111110110000011100110001001110010011;
+			5'h10: pow_lut_out = 48'b111010000100101101011010111101001001110011010101;
+			5'h0f: pow_lut_out = 48'b111010000100101100001101011001001011010110110111;
+			5'h0e: pow_lut_out = 48'b111010000100100100101010011000000011111010110001;
+			5'h0d: pow_lut_out = 48'b111010000000110001110101111000000011011110110011;
+			5'h0c: pow_lut_out = 48'b111010000000110000010110011001011011100011110101;
+			5'h0b: pow_lut_out = 48'b111010000000010010001001111101011001000110010101;
+			5'h0a: pow_lut_out = 48'b101110100010001011101110111000010011101010110101;
+			5'h09: pow_lut_out = 48'b101100110011001111111001011000010011001111110011;
+			5'h08: pow_lut_out = 48'b101100110011001110010011111001001011100010110001;
+			5'h07: pow_lut_out = 48'b100101110111011111010100111001000011000010101010;
+			5'h06: pow_lut_out = 48'b100101110111010111100011011000000011101110111000;
+			5'h05: pow_lut_out = 48'b100101110111010100101100111100001001001010011010;
+			5'h04: pow_lut_out = 48'b100101110111010000011011011100011001000110010000;
+			5'h03: pow_lut_out = 48'b100101110111000001011000011001010011101010110001;
+			5'h02: pow_lut_out = 48'b100101110101001000100111111001010011001110111011;
+			5'h01: pow_lut_out = 48'b100101110101001000100001011101001001000100000000;
+			5'h00: pow_lut_out = 48'b100101110001011001000110011000000011101010110000;
+		endcase
+	end
+	
+	wire pow_index_top_sel[3:0];
+	assign pow_index_top_sel[0] = pow_index[7:6] == 2'h0;
+	assign pow_index_top_sel[1] = pow_index[7:6] == 2'h1;
+	assign pow_index_top_sel[2] = pow_index[7:6] == 2'h2;
+	assign pow_index_top_sel[3] = pow_index[7:6] == 2'h3;
+	
+	wire [12:0] pow_lut_mux;
+	
+	assign pow_lut_mux[0] = (pow_lut_out[0] & pow_index_top_sel[0]) | (pow_lut_out[1] & pow_index_top_sel[1])
+		| (pow_lut_out[2] & pow_index_top_sel[2]) | (pow_lut_out[3] & pow_index_top_sel[3]);
+	assign pow_lut_mux[1] = (pow_lut_out[4] & pow_index_top_sel[0]) | (pow_lut_out[5] & pow_index_top_sel[1])
+		| (pow_lut_out[6] & pow_index_top_sel[2]) | (pow_lut_out[7] & pow_index_top_sel[3]);
+	assign pow_lut_mux[2] = (pow_lut_out[8] & pow_index_top_sel[0]) | (pow_lut_out[9] & pow_index_top_sel[1])
+		| (pow_lut_out[10] & pow_index_top_sel[2]) | (pow_lut_out[11] & pow_index_top_sel[3]);
+	assign pow_lut_mux[3] = (pow_lut_out[12] & pow_index_top_sel[0]) | (pow_lut_out[13] & pow_index_top_sel[1])
+		| (pow_lut_out[14] & pow_index_top_sel[3]);
+	assign pow_lut_mux[4] = (pow_lut_out[15] & pow_index_top_sel[0]) | (pow_lut_out[16] & pow_index_top_sel[1])
+		| (pow_lut_out[17] & pow_index_top_sel[2]) | (pow_lut_out[18] & pow_index_top_sel[3]);
+	assign pow_lut_mux[5] = (pow_lut_out[19] & pow_index_top_sel[0]) | (pow_lut_out[20] & pow_index_top_sel[1])
+		| (pow_lut_out[21] & pow_index_top_sel[2]) | (pow_lut_out[22] & pow_index_top_sel[3]);
+	assign pow_lut_mux[6] = (pow_lut_out[23] & pow_index_top_sel[0]) | (pow_lut_out[24] & pow_index_top_sel[1])
+		| (pow_lut_out[25] & pow_index_top_sel[2]) | (pow_lut_out[26] & pow_index_top_sel[3]);
+	assign pow_lut_mux[7] = (pow_lut_out[27] & pow_index_top_sel[0]) | (pow_lut_out[28] & pow_index_top_sel[1])
+		| (pow_lut_out[29] & pow_index_top_sel[2]) | (pow_lut_out[30] & pow_index_top_sel[3]);
+	assign pow_lut_mux[8] = (pow_lut_out[31] & pow_index_top_sel[0]) | (pow_lut_out[32] & pow_index_top_sel[1])
+		| (pow_lut_out[33] & pow_index_top_sel[2]) | (pow_lut_out[34] & pow_index_top_sel[3]);
+	assign pow_lut_mux[9] = (pow_lut_out[35] & pow_index_top_sel[0]) | (pow_lut_out[36] & pow_index_top_sel[1])
+		| (pow_lut_out[37] & pow_index_top_sel[2]) | (pow_lut_out[38] & pow_index_top_sel[3]);
+	assign pow_lut_mux[10] = (pow_lut_out[39] & pow_index_top_sel[0]) | (pow_lut_out[40] & pow_index_top_sel[1])
+		| (pow_lut_out[41] & pow_index_top_sel[2]) | (pow_lut_out[42] & pow_index_top_sel[3]);
+	assign pow_lut_mux[11] = (pow_lut_out[43] & pow_index_top_sel[1])
+		| (pow_lut_out[44] & pow_index_top_sel[2]) | (pow_lut_out[45] & pow_index_top_sel[3]);
+	assign pow_lut_mux[12] = (pow_lut_out[46] & pow_index_top_sel[2]) | (pow_lut_out[47] & pow_index_top_sel[3]);
+	
+	wire [12:0] pow_lut_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(13)) pow_lut_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(pow_lut_mux),
+		.data_out(pow_lut_sr_o)
+		);
+	
+	wire pow_index_0_sr_o;
+	
+	ym_sr_bit_opt pow_index_0_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.bit_in(pow_index[0]),
+		.sr_out(pow_index_0_sr_o)
+		);
+	
+	wire [9:0] pow_base = { pow_lut_sr_o[12:6], pow_lut_sr_o[4], pow_lut_sr_o[2], pow_lut_sr_o[0] };
+	wire [2:0] pow_delta = pow_index_0_sr_o ? { pow_lut_sr_o[5], pow_lut_sr_o[3], pow_lut_sr_o[1] } : 3'h0;
+	
+	wire [9:0] pow_sum = pow_base + pow_delta;
+	
+	wire [3:0] pow_shift_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(4)) pow_shift_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(att_clamp[11:8]),
+		.data_out(pow_shift_sr_o)
+		);
+	
+	wire [3:0] sh_sel1;
+	
+	assign sh_sel1[0] = pow_shift_sr_o[1:0] == 2'h0;
+	assign sh_sel1[1] = pow_shift_sr_o[1:0] == 2'h1;
+	assign sh_sel1[2] = pow_shift_sr_o[1:0] == 2'h2;
+	assign sh_sel1[3] = pow_shift_sr_o[1:0] == 2'h3;
+	
+	wire [3:0] sh_sel2;
+	
+	assign sh_sel2[0] = pow_shift_sr_o[3:2] == 2'h0;
+	assign sh_sel2[1] = pow_shift_sr_o[3:2] == 2'h1;
+	assign sh_sel2[2] = pow_shift_sr_o[3:2] == 2'h2;
+	assign sh_sel2[3] = pow_shift_sr_o[3:2] == 2'h3;
+	
+	wire [12:0] pow_shift1 = ({13{sh_sel1[3]}} & { 1'h1, pow_sum, 2'h0 })
+		| ({13{sh_sel1[2]}} & { 1'h1, pow_sum, 1'h0 })
+		| ({13{sh_sel1[1]}} & { 1'h1, pow_sum })
+		| ({13{sh_sel1[0]}} & { 1'h1, pow_sum[9:1] });
+	
+	wire [12:0] pow_shift2 = ({13{sh_sel2[3]}} & pow_shift1 )
+		| ({13{sh_sel2[2]}} & pow_shift1[12:4] )
+		| ({13{sh_sel2[1]}} & pow_shift1[12:8] )
+		| ({13{sh_sel2[0]}} & pow_shift1[12:12] );
+	
+	wire [13:0] op_value1 = { reg_21[4], pow_shift2 };
+	
+	wire [13:0] op_value2 = (op_value1 ^ {14{sign_sr_o}}) + sign_sr_o;
+	
+	wire [13:0] op_value_sr_o;
+	
+	assign op_output = op_value_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(14)) op_value_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(op_value2),
+		.data_out(op_value_sr_o)
+		);
+		
+	wire [13:0] op_op1_1_sr_i;
+	wire [13:0] op_op1_1_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(14), .SR_LENGTH(6)) op_op1_1_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(op_op1_1_sr_i),
+		.data_out(op_op1_1_sr_o)
+		);
+	
+	assign op_op1_1_sr_i = is_op1 ? op_value_sr_o : op_op1_1_sr_o;
+		
+	wire [13:0] op_op1_2_sr_i;
+	wire [13:0] op_op1_2_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(14), .SR_LENGTH(6)) op_op1_2_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(op_op1_2_sr_i),
+		.data_out(op_op1_2_sr_o)
+		);
+	
+	assign op_op1_2_sr_i = is_op1 ? op_op1_1_sr_o : op_op1_2_sr_o;
+		
+	wire [13:0] op_op2_sr_i;
+	wire [13:0] op_op2_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(14), .SR_LENGTH(6)) op_op2_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(op_op2_sr_i),
+		.data_out(op_op2_sr_o)
+		);
+	
+	assign op_op2_sr_i = is_op2 ? op_value_sr_o : op_op2_sr_o;
+	
+	wire [13:0] op_add1;
+	wire [13:0] op_add2;
+	
+	assign op_add1 = ({14{add1_cur}} & op_value_sr_o)
+		| ({14{add1_op1_2}} & op_op1_2_sr_o)
+		| ({14{add1_op2}} & op_op2_sr_o);
+		
+	assign op_add2 = ({14{add2_cur}} & op_value_sr_o)
+		| ({14{add2_op1_1}} & op_op1_1_sr_o);
+	
+	
+	wire [14:0] op_sum = { op_add1[13], op_add1 } + { op_add2[13], op_add2 };
+	
+	wire [13:0] op_sum_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(14)) op_sum_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(op_sum[14:1]),
+		.data_out(op_sum_sr_o)
+		);
+	
+	wire is_fb = ~no_fb;
+	
+	wire [7:1] fb_sel;
+	
+	genvar i;
+	generate
+		for (i = 1; i < 8; i = i + 1)
+		begin : l1
+			assign fb_sel[i] = is_fb & (fb == i);
+		end
+	endgenerate
+	
+	wire [9:0] op_fm_value;
+	
+	assign op_fm_value = ({10{no_fb}} & op_sum_sr_o[9:0])
+		| ({10{fb_sel[1]}} & {{4{op_sum_sr_o[13]}}, op_sum_sr_o[13:8]})
+		| ({10{fb_sel[2]}} & {{3{op_sum_sr_o[13]}}, op_sum_sr_o[13:7]})
+		| ({10{fb_sel[3]}} & {{2{op_sum_sr_o[13]}}, op_sum_sr_o[13:6]})
+		| ({10{fb_sel[4]}} & {{1{op_sum_sr_o[13]}}, op_sum_sr_o[13:5]})
+		| ({10{fb_sel[5]}} & op_sum_sr_o[13:4])
+		| ({10{fb_sel[6]}} & op_sum_sr_o[12:3])
+		| ({10{fb_sel[7]}} & op_sum_sr_o[11:2]);
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(10), .SR_LENGTH(6)) op_fm_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(op_fm_value),
+		.data_out(mod_add)
+		);
+	
+endmodule
+
+// ==== from ym3438_ch.v ====
+module ym3438_ch_opt
+	(
+	input MCLK,
+	input c1,
+	input c2,
+	input [8:0] op_value,
+	input op_out,
+	input dac_en,
+	input [7:0] dac,
+	input [7:3] reg_2c,
+	input op1_sel,
+	input fsm_dac_load,
+	input fsm_dac_out_sel,
+	input fsm_dac_ch6,
+	output [8:0] ch_dbg,
+	output [8:0] ch_out,
+	output dac_out_enable,
+	output dac_out_enable_2612
+	);
+
+	// STAGE 2: shared rising-edge-of-c2 capture pulse for collapsed cells
+	reg c2_prev = 1'h0;
+	wire c2r = c2 & ~c2_prev;
+	always @(posedge MCLK) c2_prev <= c2;
+	
+	wire dac_test = reg_2c[5];
+	
+	wire op_out_2 = op_out & ~dac_test;
+	
+	wire [8:0] op_value_mask = op_out_2 ? op_value : 9'h000;
+	
+	wire [8:0] ch_accm_sr_i;
+	wire [8:0] ch_accm_sr_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(9), .SR_LENGTH(6)) ch_accm_sr
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(ch_accm_sr_i),
+		.data_out(ch_accm_sr_o)
+		);
+	
+	wire ch_load_accm = ~(dac_test | op1_sel);
+	
+	wire accm_clear = ~(dac_test | ch_load_accm);
+	
+	wire [8:0] ch_accm_masked = ~(ch_accm_sr_o | {9{accm_clear}});
+	
+	wire [8:0] ch_accm_sum = ch_accm_masked + op_value_mask + dac_test;
+	
+	wire ch_accm_uf = ch_accm_masked[8] & op_value_mask[8] & ~ch_accm_sum[8];
+	wire ch_accm_of = ~ch_accm_masked[8] & ~op_value_mask[8] & ch_accm_sum[8];
+	
+	assign ch_accm_sr_i[7:0] = ~((ch_accm_sum[7:0] & {8{~ch_accm_uf}}) | {8{ch_accm_of}});
+	assign ch_accm_sr_i[8] = ~((ch_accm_sum[8] & ~ch_accm_of) | ch_accm_uf);
+	
+	wire [8:0] ch_value_sr_i;
+	wire [8:0] ch_value_sr_o1;
+	wire [8:0] ch_value_sr_o2;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(9), .SR_LENGTH(5)) ch_value_sr1
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(ch_value_sr_i),
+		.data_out(ch_value_sr_o1)
+		);
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(9)) ch_value_sr2
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(ch_value_sr_o1),
+		.data_out(ch_value_sr_o2)
+		);
+	
+	wire ch_sel = ~(dac_test | fsm_dac_out_sel);
+	
+	wire load_ed_o;
+	
+	ym_edge_detect_opt load_ed
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.inp(fsm_dac_load),
+		.outp(load_ed_o)
+		);
+	
+	wire ch_lock = ~(dac_test | load_ed_o);
+	
+	wire dac_sel = ~(dac_test | (fsm_dac_ch6 & dac_en));
+	
+	assign ch_value_sr_i = ch_load_accm ? ch_value_sr_o2 : ~ch_accm_sr_o;
+	
+	wire [8:0] ch_value_o = ch_sel ? ch_value_sr_o1 : ch_value_sr_o2;
+	
+	wire [8:0] ch_value_lock_o;
+
+	ym_slatch_opt #(.DATA_WIDTH(9)) ch_value_lock
+		(
+		.MCLK(MCLK),
+		.en(~ch_lock),
+		.inp(ch_value_o),
+		.val(ch_value_lock_o),
+		.nval()
+		);
+	
+	assign ch_dbg = ch_value_lock_o;
+	
+	wire [8:0] ch_dac_value = { ~dac[7], dac[6:0], reg_2c[3] };
+	
+	wire [8:0] ch_out_i = dac_sel ? ch_value_lock_o : ch_dac_value;
+	
+	assign ch_out = { ~ch_out_i[8], ch_out_i[7:0] };
+	
+	assign dac_out_enable = dac_test | ~fsm_dac_load;
+	
+	assign dac_out_enable_2612 = dac_test | fsm_dac_load;
+
+endmodule
+// ==== from ym3438.v (top) ====
+/*
+ * Copyright (C) 2023 nukeykt
+ *
+ * This file is part of Nuked-OPN2-FPGA.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ *  Nuked OPN2(Yamaha YM3438) emulator.
+ *  Thanks:
+ *      John McMaster (siliconpr0n.org):
+ *          Yamaha YM3438 & YM2610 decap and die shot.
+ *      org, andkorzh, HardWareMan (emu-russia):
+ *          help & support, YM2612 decap.
+ *
+ * version: 1.0
+ */
+
+module ym3438_opt(
+	input MCLK,
+	input PHI,
+	input [7:0] DATA_i,
+	output [7:0] DATA_o,
+	output DATA_o_z,
+	input TEST_i,
+	output TEST_o,
+	output TEST_o_z,
+	input IC, CS, WR, RD,
+	input [1:0] ADDRESS,
+	output IRQ,
+	output [8:0] MOL, MOR,
+	//output d_c1,
+	//output d_c2,
+	output [9:0] MOL_2612, MOR_2612,
+	output fm_clk1,
+	output [2:0] DAC_ch_index,
+	input ym2612_status_enable
+	);
+	
+	wire c1, c2;
+
+	// STAGE 2: shared rising-edge-of-c2 capture pulse for collapsed cells
+	reg c2_prev = 1'h0;
+	wire c2r = c2 & ~c2_prev;
+	always @(posedge MCLK) c2_prev <= c2;
+	wire reset_fsm;
+	
+	ym3438_prescaler_opt prescaler(
+		.MCLK(MCLK),
+		.PHI(PHI),
+		.IC(IC),
+		.c1(c1),
+		.c2(c2),
+		.reset_fsm(reset_fsm)
+		);
+		
+	wire fsm_sel0;
+	wire fsm_sel1;
+	wire fsm_sel2;
+	wire fsm_sel23;
+	wire fsm_timer_ed;
+	wire fsm_op1_sel;
+	wire fsm_op2_sel;
+	wire fsm_ch3_sel;
+	wire alg_fb_sel;
+	wire alg_op2;
+	wire alg_cur1;
+	wire alg_cur2;
+	wire alg_op1_0;
+	wire alg_out;
+	wire fsm_dac_load;
+	wire fsm_dac_out_sel;
+	wire fsm_dac_ch6;
+	
+	wire [2:0] connect;
+	
+	ym3438_fsm_opt fsm(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.fsm_reset(reset_fsm),
+		.connect(connect),
+		.fsm_sel0_o(fsm_sel0),
+		.fsm_sel1_o(fsm_sel1),
+		.fsm_sel2_o(fsm_sel2),
+		.fsm_sel23_o(fsm_sel23),
+		.fsm_timer_ed_o(fsm_timer_ed),
+		.fsm_op1_sel_o(fsm_op1_sel),
+		.fsm_op2_sel_o(fsm_op2_sel),
+		.fsm_ch3_sel_o(fsm_ch3_sel),
+		.alg_fb_sel_o(alg_fb_sel),
+		.alg_op2_o(alg_op2),
+		.alg_cur1_o(alg_cur1),
+		.alg_cur2_o(alg_cur2),
+		.alg_op1_0_o(alg_op1_0),
+		.alg_out_o(alg_out),
+		.fsm_dac_load(fsm_dac_load),
+		.fsm_dac_out_sel(fsm_dac_out_sel),
+		.fsm_dac_ch6(fsm_dac_ch6)
+		);
+	
+	wire [7:0] data_bus;
+	wire bank;
+	wire write_addr_en;
+	wire write_data_en;
+	
+	wire timer_a_status;
+	wire timer_b_status;
+	
+	wire [7:0] reg_21;
+	wire [7:3] reg_2c;
+	
+	wire pg_dbg;
+	wire eg_dbg;
+	wire eg_dbg_inc;
+	
+	wire [13:0] op_dbg;
+	wire [8:0] ch_dbg;
+	
+	assign TEST_o = fsm_sel23;
+	assign TEST_o_z = reg_2c[7];
+	
+	ym3438_io_opt io(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.address(ADDRESS),
+		.data(DATA_i),
+		.CS(CS),
+		.WR(WR),
+		.RD(RD),
+		.IC(IC),
+		.timer_a(timer_a_status),
+		.timer_b(timer_b_status),
+		.reg_21(reg_21),
+		.reg_2c(reg_2c),
+		.pg_dbg(pg_dbg),
+		.eg_dbg(eg_dbg),
+		.eg_dbg_inc(eg_dbg_inc),
+		.op_dbg(op_dbg),
+		.ch_dbg(ch_dbg),
+		.write_addr_en(write_addr_en),
+		.write_data_en(write_data_en),
+		.data_bus(data_bus),
+		.bank(bank),
+		.data_o(DATA_o),
+		.io_dir(DATA_o_z),
+		.irq(IRQ),
+		.ym2612_status_enable(ym2612_status_enable)
+		);
+		
+	wire [3:0] reg_lfo;
+	
+	wire [2:0] reg_pms;
+	
+	wire [10:0] reg_fnum;
+	
+	wire [4:0] reg_kcode;
+	
+	wire [2:0] reg_dt;
+	wire [3:0] reg_multi;
+	
+	wire [4:0] reg_rate;
+	wire [1:0] reg_ks;
+	
+	wire [1:0] rate_sel;
+	wire [4:0] reg_sl;
+	
+	wire kon;
+	wire kon_csm;
+	
+	wire ssg_enable;
+	wire ssg_inv;
+	wire ssg_repeat;
+	wire ssg_holdup;
+	wire ssg_type0;
+	wire ssg_type2;
+	wire ssg_type3;
+	
+	wire [6:0] reg_tl;
+	wire [1:0] reg_ams;
+	
+	wire [2:0] reg_fb;
+	
+	wire mode_csm;
+	
+	wire dac_en;
+	wire [7:0] dac;
+	
+	wire [1:0] pan;
+	
+	wire [2:0] dac_index;
+	
+	ym3438_reg_ctrl_opt reg_ctrl(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.data(data_bus),
+		.bank(bank),
+		.write_addr_en(write_addr_en),
+		.write_data_en(write_data_en),
+		.IC(IC),
+		.fsm_sel_23(fsm_sel23),
+		.fsm_sel_1(fsm_sel1),
+		.timer_ed(fsm_timer_ed),
+		.ch3_sel(fsm_ch3_sel),
+		.reg_21(reg_21),
+		.reg_2c(reg_2c),
+		.lfo(reg_lfo),
+		.pms(reg_pms),
+		.fnum(reg_fnum),
+		.block(reg_kcode[4:2]),
+		.note(reg_kcode[1:0]),
+		.dt(reg_dt),
+		.multi(reg_multi),
+		.rate(reg_rate),
+		.ks(reg_ks),
+		.rate_sel(rate_sel),
+		.sl(reg_sl),
+		.kon(kon),
+		.kon_csm(kon_csm),
+		.ssg_enable(ssg_enable),
+		.ssg_inv(ssg_inv),
+		.ssg_repeat(ssg_repeat),
+		.ssg_holdup(ssg_holdup),
+		.ssg_type0(ssg_type0),
+		.ssg_type2(ssg_type2),
+		.ssg_type3(ssg_type3),
+		.tl(reg_tl),
+		.ams(reg_ams),
+		.mode_csm(mode_csm),
+		.fb(reg_fb),
+		.dac(dac),
+		.dac_en(dac_en),
+		.fsm_dac_load(fsm_dac_load),
+		.fsm_dac_out_sel(fsm_dac_out_sel),
+		.pan_o(pan),
+		.timer_a_status(timer_a_status),
+		.timer_b_status(timer_b_status),
+		.connect(connect),
+		.dac_index(dac_index)
+		);
+	
+	wire [11:0] fnum_lfo;
+	wire [5:0] lfo_am;
+		
+	ym3438_lfo_opt lfo
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.lfo(reg_lfo),
+		.fsm_sel23(fsm_sel23),
+		.reg_21(reg_21),
+		.pms(reg_pms),
+		.IC(IC),
+		.fnum(reg_fnum),
+		.fnum_lfo(fnum_lfo),
+		.lfo_am(lfo_am)
+		);
+	
+	wire [4:0] kcode_sr1_o;
+	wire [4:0] kcode_sr2_o;
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(5)) kcode_sr1
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(reg_kcode),
+		.data_out(kcode_sr1_o)
+		);
+	
+	ym_sr_bit_array_opt #(.DATA_WIDTH(5)) kcode_sr2
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.c2r(c2r),
+		.data_in(kcode_sr1_o),
+		.data_out(kcode_sr2_o)
+		);
+	
+	wire dt_sign_1;
+	wire dt_sign_2;
+	wire [4:0] dt_value;
+	
+	ym3438_detune_opt detune
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.dt(reg_dt),
+		.kcode(kcode_sr2_o),
+		.dt_sign_1(dt_sign_1),
+		.dt_sign_2(dt_sign_2),
+		.dt_value(dt_value)
+		);
+	
+	wire [9:0] pg_out;
+	
+	wire pg_reset;
+	
+	ym3438_pg_opt pg
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.fnum(fnum_lfo),
+		.block(kcode_sr1_o[4:2]),
+		.dt_sign_1(dt_sign_1),
+		.dt_sign_2(dt_sign_2),
+		.dt_value(dt_value),
+		.multi(reg_multi),
+		.pg_reset(pg_reset),
+		.reg_21(reg_21),
+		.fsm_sel2(fsm_sel2),
+		.pg_out(pg_out),
+		.pg_dbg_o(pg_dbg)
+		);
+	
+	wire [9:0] eg_out;
+		
+	ym3438_eg_opt eg
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.fsm_sel0(fsm_sel0),
+		.fsm_sel2(fsm_sel2),
+		.IC(IC),
+		.TEST_i(TEST_i),
+		.lsi_21(reg_21),
+		.lsi_2c(reg_2c),
+		.rate(reg_rate),
+		.ks(reg_ks),
+		.kcode(kcode_sr1_o),
+		.sl(reg_sl),
+		.kon(kon),
+		.csm_kon(kon_csm),
+		.ssg_enable(ssg_enable),
+		.ssg_inv(ssg_inv),
+		.ssg_repeat(ssg_repeat),
+		.ssg_holdup(ssg_holdup),
+		.ssg_type0(ssg_type0),
+		.ssg_type2(ssg_type2),
+		.ssg_type3(ssg_type3),
+		.tl(reg_tl),
+		.ams(reg_ams),
+		.lfo_am(lfo_am),
+		.mode_csm(mode_csm),
+		.ch3_sel(fsm_ch3_sel),
+		.rate_sel(rate_sel),
+		.pg_reset(pg_reset),
+		.eg_out(eg_out),
+		.test_inc(eg_dbg_inc),
+		.eg_dbg(eg_dbg)
+		);
+	
+	wire [13:0] op_output;
+	
+	assign op_dbg = op_output;
+	
+	ym3438_op_opt op
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.pg_phase(pg_out),
+		.eg_att(eg_out),
+		.reg_21(reg_21),
+		.is_op1(fsm_op1_sel),
+		.is_op2(fsm_op2_sel),
+		.add1_cur(alg_cur1),
+		.add1_op1_2(fsm_op2_sel),
+		.add1_op2(alg_op2),
+		.add2_cur(alg_cur2),
+		.add2_op1_1(alg_op1_0),
+		.no_fb(alg_fb_sel),
+		.fb(reg_fb),
+		.op_output(op_output)
+		);
+
+	wire [8:0] ch_out;
+	wire dac_out_enable;
+	wire dac_out_enable_2612;
+	
+	ym3438_ch_opt ch
+		(
+		.MCLK(MCLK),
+		.c1(c1),
+		.c2(c2),
+		.op_value(op_output[13:5]),
+		.op_out(alg_out),
+		.dac_en(dac_en),
+		.dac(dac),
+		.reg_2c(reg_2c),
+		.op1_sel(fsm_op1_sel),
+		.fsm_dac_load(fsm_dac_load),
+		.fsm_dac_out_sel(fsm_dac_out_sel),
+		.fsm_dac_ch6(fsm_dac_ch6),
+		.ch_dbg(ch_dbg),
+		.ch_out(ch_out),
+		.dac_out_enable(dac_out_enable),
+		.dac_out_enable_2612(dac_out_enable_2612)
+		);
+	
+	reg [8:0] ch_out_l;
+	reg [1:0] ch_pan_l;
+	reg dac_out_enable_l;
+	reg dac_out_enable_2612_l;
+	reg [2:0] dac_index_l;
+	
+	//assign MOR = ch_pan[0] ? ch_out : 9'h100;
+	//assign MOL = ch_pan[1] ? ch_out : 9'h100;
+	assign MOR = (ch_pan_l[0] & dac_out_enable_l) ? ch_out_l : 9'h100;
+	assign MOL = (ch_pan_l[1] & dac_out_enable_l) ? ch_out_l : 9'h100;
+	
+	//assign d_c1 = c1;
+	//assign d_c2 = c2;
+	
+	wire DAC_2612_sign = ~ch_out_l[8];
+	wire [9:0] DAC_2612_matrix_out = DAC_2612_sign ? { 2'h3, ch_out_l[7:0] } : ({ 2'h0, ch_out_l[7:0] } + 10'h1);
+	wire [9:0] DAC_2612_silent = DAC_2612_sign ? 10'h3ff : 10'h1;
+	
+	assign MOR_2612 = (ch_pan_l[0] & dac_out_enable_2612_l) ? DAC_2612_matrix_out : DAC_2612_silent;
+	assign MOL_2612 = (ch_pan_l[1] & dac_out_enable_2612_l) ? DAC_2612_matrix_out : DAC_2612_silent;
+	
+	assign DAC_ch_index = dac_index_l;
+	
+	always @(posedge MCLK)
+	begin
+		ch_out_l <= ch_out;
+		ch_pan_l <= pan;
+		dac_out_enable_l <= dac_out_enable;
+		dac_out_enable_2612_l <= dac_out_enable_2612;
+		dac_index_l <= dac_index;
+	end
+	
+	assign fm_clk1 = c1;
+	
+endmodule

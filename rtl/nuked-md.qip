@@ -13,6 +13,7 @@ set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) nuked-m
 set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) nuked-md/ym3438_prescaler.v ]
 set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) nuked-md/ym3438_regs.v ]
 set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) nuked-md/ym3438.v ]
+set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) nuked-md/ym3438_opt.v ]
 set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) nuked-md/ym6045.v ]
 set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) nuked-md/ym6045_rtl.v ]
 set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) nuked-md/ym6046.v ]

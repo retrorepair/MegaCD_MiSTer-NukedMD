@@ -36,6 +36,13 @@
 `define NK_IOC  ym6046
 `define NK_TMSS tmss
 `endif
+// FM: NUKED_RTL_FM selects the register-collapsed ym3438_opt (1:1 logic, master-slave pairs on
+// genuine phases folded to single flip-flops; 6513 -> 3930 registers, bench-proven output-exact).
+`ifdef NUKED_RTL_FM
+`define NK_FM ym3438_opt
+`else
+`define NK_FM ym3438
+`endif
 module fc1004
 	(
 	input MCLK,
@@ -391,7 +398,7 @@ module fc1004
 		.vdp_dma(vdp_dma)
 		);
 	
-	ym3438 fm
+	`NK_FM fm
 		(
 		.MCLK(MCLK),
 		.PHI(fm_clk),

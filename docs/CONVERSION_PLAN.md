@@ -157,7 +157,7 @@ Status of the RTL (all UNCOMMITTED until their A/B bench passes in full):
 Standalone Quartus A&S, Total registers, die / 1:1 / collapsed(opt):
 | Chip | die | 1:1 | opt | opt saving | opt validated? |
 |---|---|---|---|---|---|
-| ym3438 FM   | 6,513 | 6,513 | (1,537 broken) | ~76% target | NO — collapse fails @cyc178, fix in progress |
+| ym3438 FM   | 6,513 | 6,513 | **3,930** | **-39.7%** (-2,583 FF) | YES — both seeds output-exact, 0 mismatches |
 | ym7101 VDP  | 9,970 | 9,970 |  8,892 | ~11% | NO — opt bench exited early; likely same collapse bug |
 | z80cpu      |   877 |   877 |    877 |  0% | 1:1 not yet bench-signed-off |
 | tmss+ioc+arb| (neutral, glue chips, already committed 1:1) | | | 0% | 1:1 proven |

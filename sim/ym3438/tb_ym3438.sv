@@ -59,6 +59,11 @@ module tb_ym3438;
 	// ---- storage compare (identical-hierarchy XMRs; generated) ----------------
 `ifndef OPT
 	storage_compare cmp ();
+`else
+	// diagnostic-only: compare sr_out of every ym_sr_bit instance (die vs dut) to
+	// localise the FIRST collapse divergence.  Enabled by +SROUT; never replaces
+	// the primary-output comparison (which always runs).
+	srout_compare scmp ();
 `endif
 
 	// ---- MCLK / PHI generation ------------------------------------------------
@@ -83,6 +88,7 @@ module tb_ym3438;
 	reg     quiet    = 1'b0;
 	reg     nostore  = 1'b0;
 	reg     noreset  = 1'b0;         // skip resets in the random program (+NORESET)
+	reg     srout    = 1'b0;         // diagnostic: stop at first sr_out divergence (+SROUT)
 	reg     run_done = 1'b0;
 
 	task automatic fail(input string what);
@@ -116,6 +122,11 @@ module tb_ym3438;
 			if (!nostore && cmp.mismatch) begin
 				fail("storage element(s) differ:");
 				cmp.report();
+			end
+`else
+			if (srout && scmp.mismatch) begin
+				fail("sr_out cell(s) differ:");
+				scmp.report();
 			end
 `endif
 			if (errors > 0) begin
@@ -336,6 +347,7 @@ module tb_ym3438;
 		if ($test$plusargs("QUIET"))   quiet   = 1'b1;
 		if ($test$plusargs("NOSTORE")) nostore = 1'b1;
 		if ($test$plusargs("NORESET")) noreset = 1'b1;
+		if ($test$plusargs("SROUT"))   srout   = 1'b1;
 		void'($value$plusargs("CMPSTART=%d", cmpstart));
 		$display("=== tb_ym3438  SEED=%0d NCYC=%0d %s%s ===", seed, ncyc,
 `ifdef OPT "OPT " `else "RTL " `endif , nostore ? "(outputs-only)" : "(full storage)");

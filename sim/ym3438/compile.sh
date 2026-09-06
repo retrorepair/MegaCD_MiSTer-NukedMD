@@ -41,5 +41,7 @@ $RTLDIR/ym3438_ch.v $RTLDIR/ym3438.v"
 VFLAGS="-sv -permissive -quiet -suppress 2244,2583"
 vlog $VFLAGS $DIE
 vlog $VFLAGS "$DUTFILE"
-vlog $VFLAGS $DEF storage_compare.svh tb_ym3438.sv
+SROUTF=""
+if [ "$TARGET" = "opt" ]; then SROUTF="srout_compare.svh"; fi
+vlog $VFLAGS $DEF storage_compare.svh $SROUTF tb_ym3438.sv
 echo "compile OK ($TARGET)"
