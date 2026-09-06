@@ -669,3 +669,14 @@ and once per 166,667 ticks of the 12.5 MHz enable unless software wrote a comman
   WSL and deployed 07:32; original saved at /media/fat/MiSTer.orig_20260906. Thunder Storm FX
   (JP) mounts and the JP BIOS shows its menu with music; awaiting the owner's Start press to see
   if the Sega-logo freeze is gone.
+
+## Build 36 (2026-09-06) — CDC INIT fixed; verificator runs to completion for the first time
+Deployed seed3 (md5 33405809, -2.21 @107 / -0.85 @53.7; seed1 -2.35/-0.58; seed2 -3.78 = bad).
+The 75 Hz CDD command retransmit made "insert disc without reset" read the disc: the
+verificator's cddInit now completes (build 35 froze with cdd cmds=0 stats=8). Disc-mounted run
+(FF CD USA via verificator_disc.mgl, Keep Running armed, region auto -> PAL-ratio timing):
+COLOR CALC OK, VAR 23608 (02), IRQ 227 (09), REG 8030 1275 (07), REG X/PROG/WORD/WRAM OK,
+CDC REGS 01 (correct, CDX-only), **CDC INIT OK**, CDC DMA1 OK, CDC FLAGS 05, CDC DMA2 05,
+CDC DMA3 01, "Diagnostics complete." No hang across the whole suite (~2.5 min) on a -2.21 seed.
+Next CDC accuracy items (GPGX issue 408 roadmap): FLAGS 05, DMA2 05, DMA3 01.
+Release rbf (releases/) updated to build 36.

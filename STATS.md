@@ -133,6 +133,7 @@ Slack history:
 | 33 RC | 36,196 (86%) | 519 | -1.77 | +0.25 | same sources without MCD_TELEMETRY (release shape, md5 01c33bb9): the remaining 107 MHz paths are structural (VDP address decode -> VD bus register), not congestion |
 | 34 | 37,643 (90%) | 519 | -2.22 | -0.14 | sub-CPU address ring (32 bus cycles) replaces the DMA trace; diagnostic build that located the hang |
 | 35 | 37,547 (90%) | 519 | -1.87 | -0.24 | PRS_WRITE no longer re-asserts DTACK (the hang), wave RAM reads acknowledged after the SDRAM data, FF804C font colour, Keep Running arming; seed 3 (seed 2: -2.07 / -0.43); deployed (md5 e7f75363) |
+| 36 | 36,794 (88%) | 519 | -2.21 | -0.85 | CDD command registers retransmitted every 75 Hz frame while HOCK set: CDC INIT passes, verificator runs to completion; deployed seed3 (md5 33405809) |
 
 The spread between seeds of one netlist is up to 4.3 ns at 107 MHz (build 27 vs 28), so every
 candidate is fitted with two or three seeds and the best one is deployed.
