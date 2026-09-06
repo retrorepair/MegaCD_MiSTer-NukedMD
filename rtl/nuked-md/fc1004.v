@@ -24,6 +24,18 @@
 
 // 1: input, 0: output
 
+// MegaCD: die-level -> 1:1 RTL conversion switch (docs/CONVERSION_PLAN.md). With NUKED_RTL_STAGE1 the
+// converted tmss / ym6046 / ym6045 (same ports, same logic, latches as enable-clocked flip-flops,
+// proven equivalent by the benches in sim/) are instantiated instead of the die-level models.
+`ifdef NUKED_RTL_STAGE1
+`define NK_ARB  ym6045_rtl
+`define NK_IOC  ym6046_rtl
+`define NK_TMSS tmss_rtl
+`else
+`define NK_ARB  ym6045
+`define NK_IOC  ym6046
+`define NK_TMSS tmss
+`endif
 module fc1004
 	(
 	input MCLK,
@@ -411,7 +423,7 @@ module fc1004
 	assign WAIT_pull = ~arb_wait_o;
 	assign SOUND_o = arb_sound;
 	
-	ym6045 arb
+	`NK_ARB arb
 		(
 		.MCLK(MCLK),
 		.MCLK_e(MCLK_e),
@@ -496,7 +508,7 @@ module fc1004
 		.w353(arb_w353)
 		);
 	
-	ym6046 ioc
+	`NK_IOC ioc
 		(
 		.MCLK(MCLK),
 		.PORT_A_i(PA_i),
@@ -546,7 +558,7 @@ module fc1004
 	wire tmss_ce0_o;
 	wire tmss_data_out_en;
 
-	tmss tmss_
+	`NK_TMSS tmss_
 		(
 		.MCLK(MCLK),
 		.VD_i(VD_i),
