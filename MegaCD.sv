@@ -219,6 +219,7 @@ localparam CONF_STR = {
 	"H2-;",
 	"R[0],Reset & Eject CD;",
 	"R[37],Remove Cartridge & Reset;",
+	"R[38],Eject Disc;",
 	"J1,A,B,C,Start,Mode,X,Y,Z;",
 	"jn,A,B,R,Start,Select,X,Y,L;", // name map to SNES layout.
 	"jp,Y,B,A,Start,Select,L,X,R;", // positional map to SNES layout (3 button friendly)

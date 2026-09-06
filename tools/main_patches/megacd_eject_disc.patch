@@ -1,0 +1,44 @@
+diff --git a/menu.cpp b/menu.cpp
+index a659031..4df114d 100644
+--- a/menu.cpp
++++ b/menu.cpp
+@@ -2593,6 +2593,7 @@ void HandleUI(void)
+ 											mcd_reset();
+ 											opt = "[0]";
+ 										}
++										if (bit == 38) mcd_eject();  // OSD "Eject Disc": eject only, no reset
+ 									}
+ 
+ 									if (is_pce() && !bit) pcecd_reset();
+diff --git a/support/megacd/megacd.cpp b/support/megacd/megacd.cpp
+index d64e2c7..7ac8780 100644
+--- a/support/megacd/megacd.cpp
++++ b/support/megacd/megacd.cpp
+@@ -185,6 +185,15 @@ void mcd_reset() {
+ 	need_reset = 1;
+ }
+ 
++// "Eject Disc" (OSD R[38]): open the tray WITHOUT resetting either 68000 or reloading the BIOS.
++// The running BIOS sees the drive report CD_STAT_OPEN on the next 75 Hz poll and behaves as if the
++// disc were physically removed (as on hardware). Re-inserting via the OSD file browser calls
++// mcd_set_image() again. This is the eject half of "Reset & Eject CD" (R[0]) split out on its own.
++void mcd_eject() {
++	cdd.Unload();
++	cdd.status = CD_STAT_OPEN;
++}
++
+ int mcd_send_data(uint8_t* buf, int len, uint8_t index) {
+ 	// set index byte
+ 	user_io_set_index(index);
+diff --git a/support/megacd/megacd.h b/support/megacd/megacd.h
+index 1ced67f..71e94ad 100644
+--- a/support/megacd/megacd.h
++++ b/support/megacd/megacd.h
+@@ -99,6 +99,7 @@ extern cdd_t cdd;
+ void mcd_poll();
+ void mcd_set_image(int num, const char *filename);
+ void mcd_reset();
++void mcd_eject();
+ int mcd_send_data(uint8_t* buf, int len, uint8_t index);
+ int mcd_can_send_data(uint8_t type);
+ void mcd_fill_blanksave(uint8_t *buffer, uint32_t lba);
