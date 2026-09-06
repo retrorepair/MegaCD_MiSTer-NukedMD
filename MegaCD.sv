@@ -218,6 +218,7 @@ localparam CONF_STR = {
 	"H2O[39],MCD RAM,Banks 2&3,Banks 0&1;",
 	"H2-;",
 	"R[0],Reset & Eject CD;",
+	"R[37],Remove Cartridge & Reset;",
 	"J1,A,B,C,Start,Mode,X,Y,Z;",
 	"jn,A,B,R,Start,Select,X,Y,L;", // name map to SNES layout.
 	"jp,Y,B,A,Start,Select,L,X,R;", // positional map to SNES layout (3 button friendly)
@@ -363,6 +364,7 @@ reg        keep_armed = 0;
 wire keep_running = cd_keep & keep_armed;
 wire bios_download = bios_dl_raw & ~keep_running;
 wire host_reset    = status[0] & ~keep_running;
+wire cart_remove   = status[37];   // OSD "Remove Cartridge & Reset": clears the cart slot and resets, disc kept
 always @(posedge clk_sys) begin
 	reg old_dl;
 	old_dl <= bios_dl_raw;
@@ -415,7 +417,7 @@ end
 ///////////////////////////////////////////////////
 // Resets and clock enables (same scheme as the MegaDrive HAL)
 
-wire reset   = host_reset | buttons[1] | region_set;
+wire reset   = host_reset | cart_remove | buttons[1] | region_set;
 wire cart_clearing;
 wire loading = rom_download | bk_loading | RESET | cart_clearing; // the cartridge SRAM clear (~15ms) outlasts the download; keep the 68000 in reset until it is done
 
@@ -1746,7 +1748,7 @@ always @(posedge clk_sys) begin
 	old_cart_dl <= cart_download;
 	old_bios_dl <= bios_download;
 	if(~old_cart_dl & cart_download) rom_cart_mode <= 1;
-	if((~old_bios_dl & bios_download) | host_reset) rom_cart_mode <= 0;
+	if((~old_bios_dl & bios_download) | host_reset | cart_remove) rom_cart_mode <= 0;
 end
 
 ///////////////////////////////////////////////
