@@ -90,3 +90,29 @@ clocking on both MCLK edges; the claim "no 107 MHz domain" therefore means "no o
 not "no half-period paths in the VDP". The pilot (tmss) stays on the sampling clock so that
 equivalence is exact; the board-wide move to master-clock enables is its own step after all
 modules are enable-based, proven at board level with the same A/B method.
+
+## Measured after steps 1-3 (2026-09-06): where the space saving actually is
+
+Like-for-like fit (telemetry off, same seed), die models vs converted tmss+ym6046+ym6045:
+ALMs 35,726 -> 35,955 (+229), registers 52,052 -> 52,140 (+88), slack -1.62 -> -2.74 @107
+(seed-noise). **These three modules are space-neutral converted, by design.** The reason,
+measured not assumed:
+- A die latch `mem <= c1?inp:mem` is already ONE register; `if(c1_en) mem<=inp` is also one.
+  The mux->clock-enable frees a LUT, not a register, and Quartus was already packing it.
+- The register saving that the plan called "half" comes ONLY from collapsing a master-slave
+  pair (`ym_sdff` = l1+l2 = 2 regs/bit) into a single edge-triggered flip-flop (1 reg). That
+  is valid ONLY where the pair's clock is a genuine internal clock phase. In tmss/ym6046/
+  ym6045 the clocks are bus-derived logic nets, so the agents correctly kept two registers
+  each -> no saving.
+So the space prize is NOT in the glue chips. It is in the pipelined chips whose master-slave
+stages run on real internal clock phases and are register-heavy:
+- ym3438 FM: 6,590 registers (mostly ym_sr_bit_array / sdff pipelines on the FM sample clock)
+- ym7101 VDP: 10,158 registers (pixel/serial pipelines on dclk/hclk phases)
+- the two 68000s and the Z80: their microcode-sequencer master-slave stages
+Converting those with the single-DFF collapse on their genuine phases is where ALMs and
+registers actually drop, AND it removes them from the 107 MHz sampling clock (the timing win).
+
+Revised guidance: keep the glue-chip conversions (they proved the method and the bench harness
+and are correct), but do NOT ship them (STAGE1 stays off) until they move to the master clock
+too. Prioritise FM and VDP for the space goal; measure each with the single-DFF collapse and
+the A/B bench, and only keep the collapse where the bench proves it exact.
