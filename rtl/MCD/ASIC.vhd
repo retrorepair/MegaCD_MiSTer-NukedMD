@@ -262,6 +262,7 @@ architecture rtl of ASIC is
 	signal DMNA_SET 					: std_logic;
 	signal MODE_REQ 					: std_logic;
 	signal DMA_ADDR_SET 				: std_logic;
+	signal OLD_CDC_DTEN_N 			: std_logic;	-- EDT latch: edge-detect the CDC transfer-done
 	signal VW_SET 						: std_logic;
 	signal TIME_CLK_CNT 				: unsigned(8 downto 0);
 	signal TIMER 						: unsigned(7 downto 0);
@@ -393,12 +394,24 @@ begin
 			DMA_BYTE <= '0';
 			DMA_RUN <= '0';
 			CDC_HRD <= '0';
+			OLD_CDC_DTEN_N <= '1';
 		elsif rising_edge(CLK) then
 			if EN = '1' then
 				if DMA_ADDR_SET = '1' then
 					DMA_ADDR <= DMAA(18 downto 3) & "00";
 					EDT <= '0';
 					DS <= DS_IDLE;
+				end if;
+
+				-- EDT (End of Data Transfer) is a LATCH, not a live view of "CDC idle": it is set when a
+				-- transfer actually completes (CDC deasserts DTEN, 0 -> 1) and cleared ONLY by a write to
+				-- FF8004/FF800A (DMA_ADDR_SET, above). The old code forced EDT = '1' whenever the CDC was
+				-- idle, so it read '1' after a DMA setup before the trigger and could not be cleared except
+				-- by starting a transfer (mcd-verificator CDC DMA3 test 01, CDC FLAGS test 05; the flag reads
+				-- only, so this cannot affect the CD data path).
+				OLD_CDC_DTEN_N <= CDC_DTEN_N;
+				if CDC_DTEN_N = '1' and OLD_CDC_DTEN_N = '0' then
+					EDT <= '1';
 				end if;
 				
 				case DS is
@@ -416,7 +429,7 @@ begin
 							if DMA_RUN = '1' and DD(2) = '1' then
 								DSR <= '0';
 							end if;
-							EDT <= '1';
+							-- EDT is latched on the DTEN 0->1 edge above, not set here on idle.
 						end if;
 						
 					when DS_CDC_READ =>
