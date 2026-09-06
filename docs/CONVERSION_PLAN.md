@@ -116,3 +116,26 @@ Revised guidance: keep the glue-chip conversions (they proved the method and the
 and are correct), but do NOT ship them (STAGE1 stays off) until they move to the master clock
 too. Prioritise FM and VDP for the space goal; measure each with the single-DFF collapse and
 the A/B bench, and only keep the collapse where the bench proves it exact.
+
+## Measured register saving by chip (2026-09-06 pm) — the prize is master-slave-style chips only
+
+Standalone Quartus A&S, Total registers, die vs 1:1 vs collapsed:
+| Chip | die | 1:1 (rtl) | collapsed (opt) | saving |
+|---|---|---|---|---|
+| ym3438 FM | 6,513 | 6,513 | **1,537** | **-4,976 (-76%)** (pending full-bench sign-off) |
+| z80cpu | 877 | 877 | 877 | 0 |
+
+Confirmed rule: the collapse only pays where the die model builds storage from the TWO-register
+master-slave primitives (ym_sdff / ym_sr_bit / ym7101_dff). The FM is built that way -> 76% cut.
+The Z80 uses single-register inline `always @(posedge MCLK) if(cx) l<=...` latches (already one
+register each) -> nothing to collapse. By the same style, the two 68000s (inline-latch) are
+expected to be ~neutral; the VDP (ym7101_dff master-slave pipelines, 10,158 registers) is
+expected to collapse like the FM and is the remaining big prize.
+
+Status of the RTL (all UNCOMMITTED until their A/B bench passes in full):
+- ym3438_rtl.v (1:1) + ym3438_opt.v (collapsed): directed bench 0 mismatches; FULL 2-seed 1e6
+  validation running. Commit both when clean.
+- z80_rtl.v (1:1) validated? bench infra in sim/z80 but no result log yet; z80_opt.v is
+  space-neutral (drop it, keep only the 1:1 if wanted). z80_opt_bad.v mutant left in tree -> remove.
+- ym7101_rtl.v (1:1 only, Stage 1): bench reached ~35k cycles clean when the agent was cut off;
+  needs the full run to sign off, THEN a Stage-2 collapse (ym7101_opt.v) for the real VDP saving.
