@@ -139,3 +139,15 @@ Status of the RTL (all UNCOMMITTED until their A/B bench passes in full):
   space-neutral (drop it, keep only the 1:1 if wanted). z80_opt_bad.v mutant left in tree -> remove.
 - ym7101_rtl.v (1:1 only, Stage 1): bench reached ~35k cycles clean when the agent was cut off;
   needs the full run to sign off, THEN a Stage-2 collapse (ym7101_opt.v) for the real VDP saving.
+
+## FM validation result (2026-09-06 19:50) — 1:1 PROVEN, collapse BROKEN, needs debug
+- ym3438_rtl.v (1:1): PASS both seeds, 200,018/200,019 MCLK cycles, FULL storage compare
+  (1,999 cells x2/cyc), 0 mismatches. Exact. Committed.
+- ym3438_opt.v (collapse): FAIL. Output diverges at cyc=178: MOR_2612 die=001 dut=3c0 (both
+  seeds identical). The master-slave -> single-DFF collapse changed behaviour on at least one
+  cell feeding the YM2612-mode right output. NOT committed. The 76% register cut (6513->1537) is
+  the POTENTIAL saving; it is not valid until every collapsed cell is proven output-exact.
+  Debug: diff opt vs rtl to see what collapsed near the ch/op accumulator path; the safe rule
+  is to KEEP as two registers any cell whose `val` can change during the phase-low window (only
+  cells whose val is a registered slave output of the previous stage are safely collapsible).
+  The VDP collapse (in progress) may share this failure mode; hold it to the same output-exact bar.
