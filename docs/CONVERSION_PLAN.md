@@ -171,3 +171,24 @@ So the realistic core-wide register saving from this whole effort is dominated b
 number pending the fix), plus ~1k from the VDP if its collapse is validated, out of ~52k total.
 The 1:1 conversions remain valuable for readability and for moving modules off the 107 MHz
 sampling clock later, but they are not themselves a space win.
+
+## Definitive result (2026-09-06 20:45) — the FM is the ONLY real space saving
+
+| Chip | 1:1 proven? | collapse validated? | shippable register saving |
+|---|---|---|---|
+| ym3438 FM | yes | YES (both seeds output-exact) | **6,513 -> 3,930  (-2,583, -39.7%)** |
+| ym7101 VDP | yes (222k cyc, 0 mism, both seeds) | NO — not bit-exact possible | 0 |
+| z80cpu | (1:1 not committed) | n/a (nothing to collapse) | 0 |
+| tmss / ym6046 / ym6045 | yes (committed) | n/a | 0 |
+
+Why the VDP collapse is impossible (agent-verified): its storage is (a) two-phase pixel/serial
+master-slaves that fail the same dead-time way as the FM's phase-varying cells, AND (b)
+`ym7101_dff` cells whose die output FEEDS THROUGH the open master latch (`outp = rst?0:(clk?l1:l2)`)
+- an edge flip-flop presents that one MCLK late and drops the combinational reset, desyncing the
+dot-clock generator at cycle 1. Unlike the FM, there is no large subset of safe shift chains to
+collapse, so the net VDP saving is 0. ym7101_opt.v was deleted (non-shippable).
+
+BOTTOM LINE for the space goal: the whole conversion frees ~2,583 registers, all from the FM
+(NUKED_RTL_FM), which helps ALM headroom but does not touch the timing bottleneck (VDP both-phase
+paths). The 1:1 conversions (tmss/ioc/arb/FM/VDP committed) are correct and readable but
+space-neutral; their value is readability and a future move off the 107 MHz sampling clock.
