@@ -44,3 +44,5 @@ sim/*/work/
 sim/*/worknk/
 sim/*/transcript
 sim/*/*.wlf
+sim/*/*.log
+sim/*/vsim.wlf
