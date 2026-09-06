@@ -703,3 +703,38 @@ NUKED_RTL_FM stays off by default; the EDT fix is in HEAD (verificator-only effe
 Next for CDC accuracy: build a ModelSim bench for MCD.vhd (ASIC DMA + CDC) that replays the
 verificator DMA2/DMA3/FLAGS register sequences, to iterate the EDT/DSR + odd-length fixes in
 seconds instead of 45-min builds (see docs/CDC_ACCURACY_TODO.md).
+
+## Build 39 (2026-09-07) — CDC fixes + full 1:1 conversion default + OSD; timing under review
+Overnight session bundling four tasks. All source committed + pushed (commits ccb6fdf, f0a3f92,
+331ca96, 404c6ea, 147b1ec, e84d473).
+
+**Contents**
+- CDC accuracy (ASIC.vhd): the DMA2 odd-length byte-drop and the EDT-latch clear were root-caused
+  with a new ModelSim bench (sim/cdc/tb_cdc.sv, drives real ASIC+CDC with behavioural RAM). Fixes:
+  reset DMA_BYTE on DMA_ADDR_SET (word-align every DMA); clear EDT only on the FF8004 write (new
+  DMA_EDT_CLR), not on the FF800A address write. Bench now: DMA1/FLAGS/DMA2/DMA3 all PASS, 0 fail.
+  This COMPLETES the partial build-38 EDT fix. Hardware verificator check pending on this rbf.
+- 1:1 netlist->Verilog conversions wired as the DEFAULT build (task: convert regardless of fitment):
+  FM ym3438_rtl, Z80 z80cpu_rtl, Stage1 tmss/ioc/arb _rtl — all proven storage-exact in sim/.
+  Corrected a faithfulness bug: the default FM was the register-collapsed ym3438_opt, which is only
+  output-exact (200k cyc) and NOT storage-exact (a dead-time two-phase master-slave has no single-FF
+  equivalent); demoted it to opt-in (NUKED_OPT_FM) and made the exhaustively-proven ym3438_rtl the
+  default. VDP ym7101_rtl is wired (NUKED_RTL_VDP) but OFF in build 39 (VDP w129 is on the critical
+  path) — measured separately in the sweep.
+- OSD: "Remove Cartridge & Reset" (R[37], keeps disc) + new "Eject Disc" (R[38], eject w/o reset).
+  R[38] needed a Main hook: mcd_eject() (Unload+CD_STAT_OPEN, no reset), built into
+  releases/main_mister/MiSTer (md5 f7fa87d4, also carries the seek-latency fix). Patch:
+  tools/main_patches/megacd_eject_disc.patch. Eject built, hardware check pending.
+- docs/MD_MCD_32X_ROADMAP.md — theory/roadmap for a separate combined MD+MCD+32X core (analysis only).
+
+**Build 39 fit (seed 2, telemetry on, VDP die):** 37,805/41,910 ALMs (90%), 520/553 M10K (94%),
+54,651 registers, 56 DSP. RBF md5 d1da203b (scratchpad MegaCD_b39_seed2.rbf).
+**Timing (slow 85C):** -2.873 @107 (TNS -1069), -1.187 @53.7. This is ~0.9 ns WORSE than the
+build-35/36/38 seed-2 baseline (~-1.85 to -2.03 @107, TNS -360..-586). Cause: FM opt->rtl adds
+~2000 registers and the density rose to 90%; Stage1 (arb) may also touch the critical path. But
+seed variance here is ~2 ns (build 36 saw -3.78 bad vs -1.87 good), so a seed sweep is needed
+before concluding the conversions cost timing.
+**In progress:** scratchpad/seed_sweep.sh builds b39-seed3 (VDP die) and b40-seed2/seed3 (VDP rtl),
+results -> scratchpad/sweep_summary.txt. Pick the best-timing seed; enable VDP only if it holds
+near the -2.0 baseline, else ship build-39 config (VDP converted but not enabled) and document.
+Only the two die 68000s remain un-converted.
