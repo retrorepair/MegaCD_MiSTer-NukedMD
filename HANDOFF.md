@@ -680,3 +680,21 @@ CDC REGS 01 (correct, CDX-only), **CDC INIT OK**, CDC DMA1 OK, CDC FLAGS 05, CDC
 CDC DMA3 01, "Diagnostics complete." No hang across the whole suite (~2.5 min) on a -2.21 seed.
 Next CDC accuracy items (GPGX issue 408 roadmap): FLAGS 05, DMA2 05, DMA3 01.
 Release rbf (releases/) updated to build 36.
+
+## Build 38 (2026-09-06 21:17) — FM collapse enabled + CDC EDT-latch fix; NOT the release
+Two changes, both measured on hardware/build:
+- FM collapse (NUKED_RTL_FM): same-seed full-core comparison, die-FM vs opt-FM (seed 2, telemetry
+  on): 37,500 -> 37,328 ALMs (-172, -0.46%), 54,466 -> 52,608 registers (-1,858). The register
+  saving is real but only ~0.4% ALM headroom, because the core is LUT-limited not register-limited.
+  Modest. The FM opt is sim-proven bit-exact (both seeds, 200k cycles, 0 mismatches).
+- CDC EDT-latch fix (unconditional, ASIC.vhd): verificator NTSC (region US), vs build 36:
+  DMA3 01 -> 03 (progress: EDT now reads 0 after a DMA setup), FLAGS 05 -> 03 (shifted earlier:
+  the word-RAM DMA path now doesn't hold EDT through IFCTRL=0), DMA2 05 unchanged. Directionally
+  right (EDT is a latch) but incomplete: does not yet do "EDT set when one word remains" (host-data)
+  nor the word-RAM path. Verificator-only, no gameplay impact. Needs the CDC sim bench to finish.
+Decision: build 36 stays the RELEASE (releases/, md5 33405809). Build 38 (md5 fc1a3f6e) is a
+measurement/test build; its gains (0.4% ALM, partial CDC) don't justify changing the release.
+NUKED_RTL_FM stays off by default; the EDT fix is in HEAD (verificator-only effect).
+Next for CDC accuracy: build a ModelSim bench for MCD.vhd (ASIC DMA + CDC) that replays the
+verificator DMA2/DMA3/FLAGS register sequences, to iterate the EDT/DSR + odd-length fixes in
+seconds instead of 45-min builds (see docs/CDC_ACCURACY_TODO.md).
