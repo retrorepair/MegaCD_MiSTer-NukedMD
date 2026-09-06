@@ -46,3 +46,6 @@ sim/*/transcript
 sim/*/*.wlf
 sim/*/*.log
 sim/*/vsim.wlf
+sim/*/*.out
+sim/*/gen/
+sim/*/work_opt/
