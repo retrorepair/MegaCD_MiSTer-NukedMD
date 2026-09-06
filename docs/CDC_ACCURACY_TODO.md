@@ -36,3 +36,30 @@ Region auto, Keep Running armed, `/media/fat/_Console/MegaCD_verificator_disc.mg
 cart + Final Fight CD mounted after boot). Read the CDC FLAGS / DMA2 / DMA3 lines. Reference for
 the exact hardware behaviour: Genesis Plus GX issue 408 (ekeeke's per-test commits) and
 jgenesis issue 105. Do NOT regress: CDC INIT OK, CDC DMA1 OK, CDC REGS 01 (correct, CDX-only).
+
+## Deeper analysis (2026-09-06 20:35) — needs a CDC simulation bench to iterate
+
+Traced the RTL for all three; static analysis is not enough and hardware builds (45 min each)
+are too slow to iterate. RECOMMEND building a ModelSim testbench for CDC.vhd + the ASIC DMA
+machine (like the conversion benches) that replays the verificator's exact DMA2/DMA3/FLAGS
+register sequences and checks EDT/DSR/DBC/word-RAM against the expected values — then fixes can
+be iterated in seconds instead of a 45-minute build each.
+
+Findings to seed that bench:
+- EDT (DMA3 01 / FLAGS 05): ASIC DS_IDLE sets `EDT<='1'` unconditionally while CDC_DTEN_N='1'
+  (idle). Hardware: EDT is a LATCH — DMA3 wants EDT=0 after setup (before DTTRG), EDT set when
+  ONE word remains (0xC2), DSR clears when all read (0x82), and FLAGS wants EDT cleared ONLY by
+  a FF8004 write (DMA_ADDR_SET), not by IFCTRL=0 or CDC RST. This is the jgenesis "EDT set when
+  one word left" + host-data DSR/EDT semantics (GPGX issue 408 FLAGS 22, DMA3 04). Requires a
+  proper EDT/DSR state tied to the host-data read count, not the DTEN level.
+- Odd length (DMA2 05): CDC TS_SEND decrements DBC(11:0) per host-read byte, ends at 0; the
+  ASIC reads 2 bytes/word (DS_CDC_READ toggles DMA_BYTE) and drops a partial last word when
+  DTEN deasserts mid-word. By that logic BOTH odd inputs (2349, 2351) should round down
+  identically, yet hardware/our-core differ: 2349->2348 passes, 2351->2350 fails. The
+  discrepancy is not visible statically (likely a DBC-vs-word boundary or a DTEN/DMA_BYTE race
+  at the exact 2350/2351 boundary). The sim bench replaying both lengths will expose it.
+
+Priority: build the CDC sim bench first, then EDT/DSR (fixes 2 of 3), then odd-length. Do NOT
+change the DMA machine blind — it feeds every game's CDC data path; a regression breaks all CD
+loading. Reference the exact behaviour from GPGX (ekeeke's per-test commits, issue 408) and
+jgenesis (issue 105) rather than guessing.
