@@ -151,3 +151,23 @@ Status of the RTL (all UNCOMMITTED until their A/B bench passes in full):
   is to KEEP as two registers any cell whose `val` can change during the phase-low window (only
   cells whose val is a registered slave output of the previous stage are safely collapsible).
   The VDP collapse (in progress) may share this failure mode; hold it to the same output-exact bar.
+
+## Full measured register picture (2026-09-06 20:10) — space prize is concentrated in the FM
+
+Standalone Quartus A&S, Total registers, die / 1:1 / collapsed(opt):
+| Chip | die | 1:1 | opt | opt saving | opt validated? |
+|---|---|---|---|---|---|
+| ym3438 FM   | 6,513 | 6,513 | (1,537 broken) | ~76% target | NO — collapse fails @cyc178, fix in progress |
+| ym7101 VDP  | 9,970 | 9,970 |  8,892 | ~11% | NO — opt bench exited early; likely same collapse bug |
+| z80cpu      |   877 |   877 |    877 |  0% | 1:1 not yet bench-signed-off |
+| tmss+ioc+arb| (neutral, glue chips, already committed 1:1) | | | 0% | 1:1 proven |
+
+Key finding: the collapse only pays where a chip's storage is master-slave pairs on a GENUINE
+sub-MCLK internal phase AND the pair's input is phase-stable. The FM datapath is that (big win,
+once the per-cell collapse rule is correct). The VDP is mostly TWO-phase MCLK pixel/serial logic
+that cannot collapse -> only ~11%. The Z80 / 68000s use single-register inline latches -> 0%.
+So the realistic core-wide register saving from this whole effort is dominated by the FM: order
+~4-5k registers if the FM collapse is fixed to keep only the safely-collapsible cells (final
+number pending the fix), plus ~1k from the VDP if its collapse is validated, out of ~52k total.
+The 1:1 conversions remain valuable for readability and for moving modules off the 107 MHz
+sampling clock later, but they are not themselves a space win.
