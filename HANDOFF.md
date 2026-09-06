@@ -644,3 +644,28 @@ registers every 75 Hz frame while HOCK is set. Implemented (build 36): CDD_SEND 
 and once per 166,667 ticks of the 12.5 MHz enable unless software wrote a command.
 "CD hardware detected at 0x00400000" = cartridge mode (Mode 1); upstream's screenshot shows
 0x00000000 because it ran the verificator as the CD boot ROM.
+
+## 2026-09-06 morning — status after the overnight run
+- **Composite video**: a rogue agent left uncommitted "composite video" edits (cvbs_sim.sv,
+  composite_video.md, tools/cvbs, and edits to MegaCD.sv/video_cond.sv/files.qip/README/HANDOFF).
+  None was ever committed (`git log -S cvbs` = base commit only, i.e. stock sys/yc_out.sv). The
+  faux files are gone from the tree. "Composite Blend" (MegaCD.sv) and sys/yc_out.sv are STOCK
+  MiSTer, kept. Nothing of ours was lost.
+- **Conversion steps 1-3 pushed**: tmss_rtl.v, ym6046_rtl.v (I/O), ym6045_rtl.v (arbiter), each
+  1:1 with an A/B ModelSim bench in sim/ (all outputs + every storage bit compared twice/MCLK,
+  0 mismatches over millions of cycles, mutants caught). fc1004.v selects them under the
+  `NUKED_RTL_STAGE1` Verilog macro (die models otherwise); RTL files added to rtl/nuked-md.qip.
+- **Stage-1 measurement build** (HEAD + NUKED_RTL_STAGE1, telemetry still in): Analysis &
+  Synthesis 0 errors (the conversion integrates), Fitter "can't fit" on that seed at 88% ALM
+  (routing at the capacity edge, telemetry compiled in). ALM count == die-model build, as the
+  plan predicts for stage 1 (savings come when the modules leave the 107 MHz sampling clock).
+  Redo with telemetry off + a good seed to get real numbers.
+- **z80_rtl.v + sim/z80/**: WIP, untracked. The z80 conversion agent verified its transformer
+  output but was cut off (session limit) before running the bench; do NOT trust/commit until the
+  bench passes. ym3438 (FM) conversion agent was cut off before writing ym3438_rtl.v.
+- **Build 36** (35 + CDD 75 Hz command retransmit for CDC INIT): first seed -3.78 @107 (bad
+  seed; the change is in the 53 MHz gate array). Reseeding (seeds 1,3) for a deployable rbf.
+- **Main patched** (seek latency 12, tools/main_patches) built with the Arm 10.2 toolchain in
+  WSL and deployed 07:32; original saved at /media/fat/MiSTer.orig_20260906. Thunder Storm FX
+  (JP) mounts and the JP BIOS shows its menu with music; awaiting the owner's Start press to see
+  if the Sega-logo freeze is gone.
