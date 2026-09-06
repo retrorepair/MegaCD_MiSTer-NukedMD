@@ -25,6 +25,16 @@
 //`define EXT_CLOCKS
 //`define VRAM_128K
 
+// Z80: NUKED_RTL_Z80 (default build) selects z80cpu_rtl, the 1:1 readable-Verilog conversion of the
+// die netlist (z80_dlatch/z80_rs_trig_nor/z80_rs_trig_nand helper modules inlined as enable-clocked
+// FFs / RS latches). Proven storage-EXACT vs the die in sim/z80 (386k cycles x2 seeds, all 899
+// storage bits + 16 output pins, 0 mismatches; register count 877 == 877). Otherwise the die netlist.
+`ifdef NUKED_RTL_Z80
+`define NK_Z80 z80cpu_rtl
+`else
+`define NK_Z80 z80cpu
+`endif
+
 module md_board
 	(
 	// input MCLK,
@@ -600,7 +610,7 @@ module md_board
 	wire z80_ZWR_d;
 	wire INT;
 	
-	z80cpu z80
+	`NK_Z80 z80
 		(
 		.MCLK(MCLK2),
 `ifndef EXT_CLOCKS

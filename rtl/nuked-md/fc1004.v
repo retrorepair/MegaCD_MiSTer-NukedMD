@@ -36,12 +36,33 @@
 `define NK_IOC  ym6046
 `define NK_TMSS tmss
 `endif
-// FM: NUKED_RTL_FM selects the register-collapsed ym3438_opt (1:1 logic, master-slave pairs on
-// genuine phases folded to single flip-flops; 6513 -> 3930 registers, bench-proven output-exact).
-`ifdef NUKED_RTL_FM
+// FM implementation select:
+//   NUKED_RTL_FM (default build) -> ym3438_rtl : the 1:1 readable-Verilog conversion of the die
+//       netlist (transparent latches -> enable-clocked FFs, master-slave pairs kept as two FFs).
+//       Proven output- AND storage-EXACT vs the die in sim/ym3438 (1,000,000 cycles x2 seeds on
+//       every output + a 140k full-storage compare of all 1999 cells, 0 mismatches). This is the
+//       faithful conversion the task asked for, and it synthesises far better than the die netlist.
+//   NUKED_OPT_FM (opt-in, overrides) -> ym3438_opt : the register-collapsed variant (single FF where
+//       a master-slave input is phase-stable; ~3930 vs 6572 register bits). Its curated KEEP
+//       classification is claimed OUTPUT-exact over 200k cycles/2 seeds, but it is NOT storage-exact
+//       and the naive all-collapse is provably wrong (dead-time two-phase master-slave). Area
+//       experiments only -- NOT the default, because faithfulness outranks the ~170-ALM saving.
+//   neither -> ym3438 : the original die netlist (gate-level, heavy).
+`ifdef NUKED_OPT_FM
 `define NK_FM ym3438_opt
+`elsif NUKED_RTL_FM
+`define NK_FM ym3438_rtl
 `else
 `define NK_FM ym3438
+`endif
+// VDP: NUKED_RTL_VDP (default build) selects ym7101_rtl, the 1:1 readable-Verilog conversion of the
+// die netlist (transparent latches -> enable-clocked FFs, master-slave pairs -> two FFs; own renamed
+// ym7101_dff_rtl / ym7101_rs_trig_rtl helper cells). Proven storage-EXACT vs the die in sim/ym7101
+// (222k cycles x2 seeds, all outputs + every storage cell, 0 mismatches). Otherwise the die netlist.
+`ifdef NUKED_RTL_VDP
+`define NK_VDP ym7101_rtl
+`else
+`define NK_VDP ym7101
 `endif
 module fc1004
 	(
@@ -309,7 +330,7 @@ module fc1004
 	
 	wire no_tmss_flag;
 	
-	ym7101 vdp(
+	`NK_VDP vdp(
 		.MCLK(MCLK),
 		.MCLK_e(MCLK_e),
 		.SD(SD),
