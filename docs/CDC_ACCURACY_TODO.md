@@ -63,3 +63,25 @@ Priority: build the CDC sim bench first, then EDT/DSR (fixes 2 of 3), then odd-l
 change the DMA machine blind — it feeds every game's CDC data path; a regression breaks all CD
 loading. Reference the exact behaviour from GPGX (ekeeke's per-test commits, issue 408) and
 jgenesis (issue 105) rather than guessing.
+
+## RESOLVED (2026-09-07, build 39) — sim bench built, both root causes fixed
+
+Built the recommended ModelSim bench (`sim/cdc/tb_cdc.sv`) driving the real ASIC.vhd + CDC.vhd
+with behavioural RAM models, replaying the verificator's DMA/FLAGS register sequences. It
+reproduced the board's `DMA2 05` exactly. Two structural fixes in `rtl/MCD/ASIC.vhd` (commit
+ccb6fdf) make all four pass: `DMA1 PASS, FLAGS PASS, DMA2 PASS, DMA3 PASS, 0 failures`.
+
+1. **DMA2 (odd length)** was NOT the CDC DBC-countdown hypothesised above. The word-assembly
+   phase bit `DMA_BYTE` was left `'1'` after an odd transfer dropped its dangling byte, and
+   `DMA_ADDR_SET` never reset it, so the NEXT DMA began mid-word and both mis-assembled and
+   mis-counted (2349->2348 passed only because it ran first and left DMA_BYTE set; 2351 inherited
+   it). Fix: reset `DMA_BYTE<='0'` on `DMA_ADDR_SET` — every DMA starts word-aligned; word/PRG
+   round down uniformly; PCM (never sets DMA_BYTE) stays byte-granular.
+2. **FLAGS / EDT latch** — both the FF8004 (DD) and FF800A (DMA-address) writes pulsed the shared
+   `DMA_ADDR_SET`, which cleared EDT, so an FF800A write wiped the end-of-transfer latch. Fix: a
+   `DMA_EDT_CLR` pulse armed ONLY by the FF8004 case clears EDT; removed EDT-clear from
+   `DMA_ADDR_SET`. The existing DTEN 0->1 EDT latch (added earlier) already gives the
+   one-word-left / all-read host-data semantics once the surrounding state is clean.
+
+Both structural, no timing hacks; match GPGX-408 / jgenesis-105. Hardware confirmation pending on
+build 39 (run the verificator with the disc mounted).
