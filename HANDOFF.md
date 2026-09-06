@@ -681,7 +681,12 @@ CDC DMA3 01, "Diagnostics complete." No hang across the whole suite (~2.5 min) o
 Next CDC accuracy items (GPGX issue 408 roadmap): FLAGS 05, DMA2 05, DMA3 01.
 Release rbf (releases/) updated to build 36.
 
-## Build 38 (2026-09-06 21:17) — FM collapse enabled + CDC EDT-latch fix; NOT the release
+## Build 38 (2026-09-06) — PROMOTED TO RELEASE
+Thunder Storm FX boots (patched Main) and FM audio confirmed OK on hardware; FM collapse enabled
+by default (NUKED_RTL_FM in MegaCD.qsf) so a source rebuild matches the release rbf (md5 fc1a3f6e).
+Build 36 superseded.
+
+## Build 38 (superseded note) —
 Two changes, both measured on hardware/build:
 - FM collapse (NUKED_RTL_FM): same-seed full-core comparison, die-FM vs opt-FM (seed 2, telemetry
   on): 37,500 -> 37,328 ALMs (-172, -0.46%), 54,466 -> 52,608 registers (-1,858). The register
