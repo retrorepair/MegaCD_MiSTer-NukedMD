@@ -814,3 +814,78 @@ A seed sweep was interrupted to prioritise the CDC hang fix. Genuine closure nee
 
 **Note:** Quartus inlined sys.tcl/files.qip into MegaCD.qsf during the rapid build/kill cycles (the
 known 125085 hazard); restored the clean 68-line qsf before committing.
+
+---
+
+## Session 2026-09-07 (cont.): the faithful sub-CPU CDC bench works
+
+`sim/cdc/tb_mcd_cdc.sv` now drives the whole `rtl/MCD/MCD.vhd` block — real gate-level
+sub-CPU running the verificator sub BIOS, real ASIC, real CDC — and relays every `FF80xx`
+access through the actual COMCMD mailbox. This is the bench `docs/CDC_ACCURACY_TODO.md`
+asked for, and it no longer gives false passes.
+
+**Sub BIOS protocol, decoded 1:1 from the extracted machine code** (not guessed):
+```
+0x202 movea.l #$70000,a7 / 0x208 move #$2000,sr      init (IRQ mask 0 => level 5 enabled)
+0x20c move.w #0,(FF8026)  while cmd_idx!=0           ack-wait, clears COMSTA[3]
+0x21c move.w #0,(FF8020)                             STA_BSY:=0  => READY
+0x222 cmpi.w #0,(FF8010) / beq 0x222                 idle, wait for a command
+0x22c move.w (FF8010),(FF8020)                       STA_BSY:=cmd  => BUSY (before dispatch!)
+cmd1 RD_B 0x286  a0:=(FF8014); (FF8022).b:=(a0).b
+cmd2 WR_B 0x292  a0:=(FF8014); (a0).b:=(FF8012).b
+cmd3 RD_W 0x29e  a0:=(FF8014); (FF8022):=(a0).w
+cmd4 WR_W 0x2aa  a0:=(FF8014); (a0):=(FF8012).w
+lvl5 ISR  0x37c  move.w #5,(FF8026); rte              CDC IRQ -> COMSTA[3]=5
+lvl6 ISR  0x384  move.w #6,(FF8026); rte
+```
+So mailbox = cmd_idx FF8010 / cmd_dat FF8012 / cmd_adr FF8014(u32) / sta_bsy FF8020 /
+sta_rsp FF8022.
+
+**The DMA-complete handshake is end-to-end real.** CDC drains to word RAM -> DTEI ->
+`IFSTAT(DTEI)=0` -> `INT_N` low (CDC.vhd:645) -> ASIC latches `INT_PEND(5)` on the falling
+edge (ASIC.vhd:1306) and drives IPL5 if `IEN(5)` (ASIC.vhd:2520) -> the real 68000 takes the
+autovectored interrupt -> ISR writes `FF8026=5` -> main polls `A12026`. A DMA machine that
+never finishes therefore hangs here exactly as on hardware.
+
+**Three bench defects fixed (no RTL changed):**
+1. **`IEN(5)` was never enabled.** The gate-array interrupt mask is `FF8032`, written on the
+   LOW byte (`IEN <= S68K_DI(6 downto 1)`, ASIC.vhd:993), so it needs a *word* write via the
+   relay. The sub BIOS init never writes it, so the main must. The isolated `tb_cdc.sv` had
+   hardcoded `ien5 = 1'b1` and so never exercised this at all.
+2. **The relay returned before the sub had executed the command.** The sub sets
+   `STA_BSY:=cmd_idx` at 0x22c *before* dispatching, so `BSY!=0` only means "accepted".
+   Probes showed state lagging exactly one write, with the DTTRG write never happening —
+   indistinguishable from a dead DMA machine, because `EDT=1` merely means `CDC_DTEN_N=1`
+   (ASIC.vhd:405-424). `mcd_cmd()` now ends with `wait_bsy0()`.
+3. **Main reads were ~10x too fast.** The real main 68000 is 7.67 MHz and cannot issue
+   `A12008` reads back-to-back at 53.7 MHz; draining the host FIFO faster than a real CPU
+   outruns the CDC fetch and makes DSR read low early (a bench-only `DMA3 ERROR 03`).
+   `ext_rd_host()` uses the same 150-CLK spacing as the isolated bench's `EXT_GAP`.
+
+**Results (both agree with hardware and with the isolated bench):**
+| CDC build | `test_dma3` result |
+|---|---|
+| build-36 (HEAD) | `ERROR 01` — flags `82` vs expected `02` (EDT set while idle) = the hardware result |
+| `ccb6fdf` variant | `01`,`02` pass, `01-07 OK`, `22`=`47`, `23`=`87` -> **PASS** |
+
+So the `ccb6fdf` EDT-latch does fix DMA3 01/02, and the WRAM DMA (0x22/0x23) completes on it.
+**The hardware hang is therefore NOT at 0x22.**
+
+**Where the hang must be:** sub-tests `0x10`-`0x21` — the SUB-destination host reads and the
+two cross-reader cases. The isolated bench had to skip every one (`if(1'b0)`) because they
+need a real sub-CPU; this bench is the first that can run them. `0x10` (subflags `03`) and
+`0x11` (subflags `43`) already PASS on the variant. The 2348-byte drain through the relay is
+slow in sim (~11 us of sim per relay round-trip, dominated by the sub executing the handler),
+so a full `0x10`-`0x21` pass is roughly a 2-hour ModelSim run. Sub-tests `0x26`/`0x30+`
+(buffer wrap) are still not transcribed.
+
+**Do not** reintroduce `e22d454`/`ccb6fdf` on hardware until `0x10`-`0x21` are shown to
+complete in this bench.
+
+Run it with:
+```
+bash sim/cdc/compile_mcd.sh
+/c/intelFPGA_lite/17.0/modelsim_ase/win32aloem/vsim -c -quiet work.tb_mcd_cdc -do "run -all; quit -f"
+```
+To test a variant: `git checkout ccb6fdf -- rtl/MCD/ASIC.vhd`, compile, then
+`git checkout HEAD -- rtl/MCD/ASIC.vhd` (the sim runs from the compiled `work` library).
