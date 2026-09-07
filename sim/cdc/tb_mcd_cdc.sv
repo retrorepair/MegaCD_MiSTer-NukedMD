@@ -233,7 +233,12 @@ module tb_mcd_cdc;
    //   0x130C8 1176 MAIN reads; 0x130DC (A12004)=43 test 21; 0x130E8 1176 relayed reads
    // Note the SUB drains are individual mcdRead16 calls -- the BIOS burst commands (5/6)
    // are NOT used here, so ~3500 relay round-trips are genuinely what hardware performs.
-   task automatic test_dma3(input int PTv, output int err);
+   // fast=1 skips the three bulk host drains (0x10-0x16, 0x20, 0x21).  Those are ~3500
+   // COMCMD round-trips = hours of sim, and they have already been shown to PASS; skipping
+   // them gets to the untested destination paths (PRG/PCM) quickly.  Each test begins with
+   // its own cdc_dma_setup, which reprograms DD/DBC/DAC and resets DMAA, so the skipped
+   // drains do not leave state the later tests depend on.
+   task automatic test_dma3(input int PTv, input bit fast, output int err);
       int i; bit hung2; logic [15:0] t16; logic [7:0] t8;
       err = 0;
       mcd_wram_mode_2m(); wram_to_sub(); gvsync(); mem_wp_0();
@@ -255,6 +260,7 @@ module tb_mcd_cdc;
       mcd_rd8('hFF8004,t8);    if (t8!=8'h82) begin err='h07; $display("    [dma3] 07 subflags=%02h (exp 82)",t8); return; end
       $display("    [dma3] 01-07 MAIN host  OK");
 
+      if (!fast) begin
       // ---- 0x10-0x16: SUB host-data EDT/DSR (needs the real sub-CPU; the isolated
       //      bench had to skip all of this) ----
       cdc_dma_setup(CDC_DST_SUB, 2352, PTv);
@@ -291,6 +297,7 @@ module tb_mcd_cdc;
       mcd_rd8('hFF8004,t8); if (t8!=8'h43) begin err='h21; $display("    [dma3] 21 subflags=%02h (exp 43)",t8); return; end
       for (i=0;i<2352;i+=2) mcd_rd16('hFF8008,t16);
       $display("    [dma3] 21 SUB-dest/MAIN-reader  OK");
+      end // !fast
 
       // ---- 0x22-0x23: WRAM dma -- the first unbounded while(COMSTA[3]!=5) ----
       wram_to_sub(); gvsync();
@@ -306,6 +313,44 @@ module tb_mcd_cdc;
       ext_rd8_hi('h12004,t8);
       $display("    [dma3] 23 flags=%02h (exp 87)", t8);
       if (t8!=8'h87) begin err='h23; return; end
+
+      // ---- 0x24-0x25: PRG-RAM dma (DD=5), DMA addr 0x4000, unbounded poll #2 ----
+      // ROM 0x1317C..0x131E2.  A DIFFERENT ASIC destination path (PR_DMA_RUN), never
+      // exercised by either bench before, and one the ccb6fdf DMA_BYTE change touches.
+      cdc_end();
+      cdc_dma_setup(CDC_DST_PRG, 2352, PTv);
+      mcd_wr16('hFF800A, 16'h4000);                 // pea $4000 -> mcdWrite16(FF800A,$4000)
+      dttrg();
+      ext_rd8_hi('h12004,t8);
+      $display("    [dma3] 24 flags=%02h (exp 05/45)", t8);
+      if ((t8 & ~DSR)!=8'h05) begin err='h24; return; end
+      wait_comsta5("DMA3 0x24 PRG", hung2); if (hung2) begin err=HANGV; return; end
+      ext_rd8_hi('h12004,t8);
+      $display("    [dma3] 25 flags=%02h (exp 85)", t8);
+      if (t8!=8'h85) begin err='h25; return; end
+
+      // ---- 0x26-0x27: PCM dma (DD=4), unbounded poll #3 ----
+      // ROM 0x131EA..0x1325A.  PCM keeps byte granularity in the ASIC (DS_CDC_READ tests
+      // DD /= "100"), so this path pairs bytes differently from WRAM/PRG.
+      cdc_end();
+      cdc_dma_setup(CDC_DST_PCM, 2352, PTv);
+      mcd_wr16('hFF800A, 16'h0000);
+      dttrg();
+      ext_rd8_hi('h12004,t8);
+      $display("    [dma3] 26 flags=%02h (exp 04/44)", t8);
+      if ((t8 & ~DSR)!=8'h04) begin err='h26; return; end
+      wait_comsta5("DMA3 0x26 PCM", hung2); if (hung2) begin err=HANGV; return; end
+      ext_rd8_hi('h12004,t8);
+      $display("    [dma3] 27 flags=%02h  (exp (f&~30)==84)", t8);
+      if ((t8 & ~8'h30)!=8'h84) begin err='h27; return; end
+
+      // ---- trailing WRAM dma + unbounded poll #4 (ROM 0x132B8..0x132F0) ----
+      cdc_end();
+      cdc_dma_setup(CDC_DST_WRAM, 2352, PTv);
+      set_dma_addr(0);
+      dttrg();
+      wait_comsta5("DMA3 trailing WRAM", hung2); if (hung2) begin err=HANGV; return; end
+      $display("    [dma3] 24-27 + trailing WRAM  OK");
    endtask
 
    logic [7:0] h0,h1,h2,h3,ptl,pth,fl; logic [15:0] pt; int i; int PT; bit hung; int e;
@@ -342,7 +387,7 @@ module tb_mcd_cdc;
       cdc_end();                                   // decoder off, IFCTRL re-armed (DOUTEN|DTEIEN)
       mcd_wr16('hFF8032, 16'h0020);                // IEN(5)=1: route the CDC (DTEI) IRQ to sub IPL5
                                                    //   (gate-array int mask, FF8032 low byte, DI(6:1))
-      test_dma3(PT, e);
+      test_dma3(PT, 1'b1, e);   // fast=1: skip the ~3h bulk host drains (already shown to PASS)
       if      (e==HANGV) $display("  CDC DMA3     HANG");
       else if (e)        $display("  CDC DMA3     ERROR %02h", e);
       else               $display("  CDC DMA3     PASS");
