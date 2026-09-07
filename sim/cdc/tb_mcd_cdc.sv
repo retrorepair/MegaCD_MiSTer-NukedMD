@@ -4,7 +4,17 @@
 // main-side EXT bus, and relays FF80xx accesses THROUGH the real sub-CPU via the
 // COMCMD mailbox (mcd.c protocol) -- so the SUB-dest host tests and the deep DMA3
 // hang reproduce faithfully. A real CD sector is fed through CDC_DATA/CDC_DAT_WR.
-// Stage: boot + relay + INIT (validate HEAD/PT via the relay). DMA3 added next.
+//
+// Stage: boot + relay + INIT + DMA3 0x22/0x23 (CDC->word-RAM DMA).
+// The DMA-complete handshake is END-TO-END REAL: the CDC raises DTEI, the ASIC routes it
+// to sub IPL5 (needs IEN(5) via FF8032), the real sub-CPU takes the interrupt and its ISR
+// at 0x37c writes COMSTA[3] (FF8026)=5, and the main polls A12026 for that 5.  So a DMA
+// machine that never completes shows up here exactly as it does on hardware: a hang.
+//
+// NOTE (relay): the sub sets STA_BSY:=cmd_idx at 0x22c BEFORE it dispatches to the handler,
+// so BSY!=0 means "accepted", not "done".  Every relay command therefore ends with a
+// wait_bsy0() -- without it the bench races ahead of the sub and e.g. the DTTRG write has
+// not yet happened when we look, which looks exactly like a dead DMA machine.
 // ============================================================================
 `timescale 1ns/1ps
 
@@ -97,6 +107,10 @@ module tb_mcd_cdc;
       wait_bsy0(); ext_wr16('h12010, cmd);
       t=0; forever begin ext_rd('h12020,1'b1,v); if(v!=16'h0) break; if(++t>40000) begin $display("  >>> relay HANG: sub didnt ack cmd %0d @%0t",cmd,$time); break; end end
       ext_wr16('h12010, 16'h0000);
+      // The sub sets STA_BSY:=cmd_idx at 0x22c BEFORE dispatching to the handler, so BSY!=0 only
+      // means "accepted", not "done".  It returns to 0x21c (STA_BSY:=0) after the handler has run.
+      // Wait for that, or the access has not actually hit the CDC/gate array when we return.
+      wait_bsy0();
    endtask
    task automatic mcd_set_adr(input int addr);
       ext_wr16('h12014, addr[31:16]); ext_wr16('h12016, addr[15:0]);
@@ -133,11 +147,63 @@ module tb_mcd_cdc;
       CDC_DATA=w; CDC_DAT_WR=1'b1; wait_en_ticks(2); CDC_DAT_WR=1'b0; wait_en_ticks(2);
    endtask
 
+   // ---------------- DMA3 test helpers (mcd-verificator) ----------------
+   localparam [2:0] CDC_DST_MAIN=3'd2, CDC_DST_SUB=3'd3, CDC_DST_PCM=3'd4, CDC_DST_PRG=3'd5, CDC_DST_WRAM=3'd7;
+   localparam CDC_IFCTRL=1, CDC_DBCL=2, CDC_DTACK_R=7, CDC_CTRL0=10, CDC_RST=15;
+   localparam [7:0] IFCTRL_DOUTEN=8'h02, IFCTRL_DTEIEN=8'h40, EDT=8'h80, DSR=8'h40;
+   localparam int POLL_BUDGET=20000, HANGV=32'h1000;   // A12026 polls; a real 2352 DMA sets FF8026=5 in << this
+
+   // main-side (EXT) byte read = hi byte of an even A120xx
+   task automatic ext_rd8_hi(input int addr, output [7:0] val); logic [15:0] d; ext_rd(addr,1'b1,d); val=d[15:8]; endtask
+   // CDC config via the sub-CPU relay
+   task automatic cdc_dtack();  cdc_sel(CDC_DTACK_R); cdc_wr(8'h00); endtask
+   task automatic set_ifctrl(input [7:0] v); cdc_sel(CDC_IFCTRL); cdc_wr(v); endtask
+   task automatic cdc_dma_setup(input [2:0] dst, input int N, input int ptv);
+      mcd_wr8('hFF8004, {5'b0,dst});                    // DD=dst: resets DMAA, clears EDT
+      cdc_sel(CDC_DBCL);                                // AR=2
+      cdc_wr((N-1)&8'hFF); cdc_wr(((N-1)>>8)&8'hFF);    // DBCL,DBCH  (AR->4)
+      cdc_wr(ptv&8'hFF);   cdc_wr((ptv>>8)&8'hFF);      // DACL,DACH  (AR->6=DTTRG)
+   endtask
+   task automatic dttrg(); cdc_wr(8'h00); repeat(400)@(posedge CLK); endtask   // AR=6 write triggers DMA; settle DTEN
+   // internal-state probe: everything that gates DTTRG -> DTEN_N -> ASIC DMA
+   task automatic probe(input string tag);
+      $display("  [probe %-10s] AR=%1h DBC=%04h DAC=%04h IFCTRL=%02h IFSTAT=%02h DTEN_N=%b WAIT_N=%b EDT=%b DD=%b DS_idle_EDT",
+               tag, dut.CDC.AR, dut.CDC.DBC, dut.CDC.DAC, dut.CDC.IFCTRL, dut.CDC.IFSTAT,
+               dut.CDC_DTEN_N, dut.CDC_WAIT_N, dut.ASIC.EDT, dut.ASIC.DD);
+   endtask
+   task automatic set_dma_addr(input int byte_addr); mcd_wr16('hFF800A, (byte_addr>>3)); endtask
+   task automatic cdc_end();
+      cdc_sel(CDC_CTRL0); cdc_wr(8'h00); cdc_wr(8'h00);        // decoder off
+      set_ifctrl(8'h00); set_ifctrl(IFCTRL_DOUTEN|IFCTRL_DTEIEN);
+   endtask
+   // word-RAM ownership / mode
+   task automatic mcd_wram_mode_2m(); logic [15:0] v; mcd_rd16('hFF8002,v); v=v & ~16'h0014; mcd_wr16('hFF8002,v); endtask
+   task automatic wram_to_sub(); ext_wr('h12002,16'h0002,1'b0,1'b1); endtask   // main: DMNA=1 -> WRAM to sub
+   task automatic mem_wp_0();    ext_wr('h12002,16'h0000,1'b1,1'b0); endtask   // main: MEM_WP=0
+   task automatic gvsync();      repeat(200)@(posedge CLK); endtask
+   // FAITHFUL DMA-complete wait: the real sub takes the CDC level-5 IRQ (DTEI) and its ISR
+   // writes COMSTA[3] (FF8026)=5.  Main polls A12026.  If the DMA machine hangs (no DTEI),
+   // the sub never interrupts, FF8026 stays 0, and this times out -- reproducing the hang.
+   task automatic wait_comsta5(input string label, output bit hung);
+      int t; logic [15:0] v; t=0; hung=0;
+      forever begin
+         ext_rd('h12026,1'b1,v);
+         if (v[7:0]==8'd5) break;
+         if (++t>=POLL_BUDGET) begin hung=1; break; end
+         if (t%1500==0) $display("    [poll %0d] A12026=%04h DBC=%04h DAC=%04h IFSTAT=%02h DTEN_N=%b EDT=%b",
+                                 t, v, dut.CDC.DBC, dut.CDC.DAC, dut.CDC.IFSTAT, dut.CDC_DTEN_N, dut.ASIC.EDT);
+      end
+      if (hung) $display("  >>> HANG @ %s (A12026 poll %0d reads, last=%04h)", label, t, v);
+   endtask
+
    // ============================ main ============================
    int  sub_cycles=0; logic [23:0] a_last='1;
    always @(posedge MCLK) if(DBG_S68K_AS_N==1'b0 && DBG_S68K_A!==a_last) begin a_last<=DBG_S68K_A; sub_cycles++; end
+   // ISR-entry probe: count times the sub fetches in the lvl5/lvl6 ISR window (0x37c..0x392)
+   int  isr_hits=0; logic [23:0] isr_a='1;
+   always @(posedge MCLK) if(DBG_S68K_AS_N==1'b0 && DBG_S68K_A>=24'h00037c && DBG_S68K_A<=24'h000392 && DBG_S68K_A!==isr_a) begin isr_a<=DBG_S68K_A; isr_hits++; end
 
-   logic [7:0] h0,h1,h2,h3,ptl,pth; logic [15:0] pt; int i;
+   logic [7:0] h0,h1,h2,h3,ptl,pth,fl; logic [15:0] pt; int i; int PT; bit hung;
    initial begin
       RST_N=1'b0; repeat(50) @(posedge CLK); RST_N=1'b1; repeat(50) @(posedge CLK);
       $display("======== MCD sub-CPU CDC bench ========");
@@ -160,10 +226,40 @@ module tb_mcd_cdc;
       for(i=0;i<1176;i++) feed_word(sector_word[i]);
       repeat(4000) @(posedge CLK);
       cdc_sel(8'h04); cdc_rd(h0); cdc_rd(h1); cdc_rd(h2); cdc_rd(h3); cdc_rd(ptl); cdc_rd(pth);
-      $display("  [init] HEAD=%02h %02h %02h %02h  PT=%02h%02h  %s",
-               h0,h1,h2,h3,pth,ptl, ({h3,h2,h1,h0}==32'h01000200)?"HEAD OK":"HEAD MISMATCH");
+      PT = (pth<<8)|ptl;
+      $display("  [init] HEAD=%02h %02h %02h %02h  PT=%04h  %s",
+               h0,h1,h2,h3,PT, ({h3,h2,h1,h0}==32'h01000200)?"HEAD OK":"HEAD MISMATCH");
+
+      // ---------------- DMA3: WRAM transfer (the first unbounded while(COMSTA[3]!=5)) ----------------
+      // Faithful end-to-end: main sets up + triggers the WRAM DMA via the sub relay, then polls the
+      // real A12026 that the sub's CDC-IRQ ISR writes to 5 on DTEI.  On build-36 CDC the DMA finishes
+      // (COMSTA3=5); on the build-40 variants the DMA machine is expected to hang here (no DTEI).
+      cdc_end();                                   // decoder off, IFCTRL re-armed (DOUTEN|DTEIEN)
+      mcd_wr16('hFF8032, 16'h0020);                // IEN(5)=1: route the CDC (DTEI) IRQ to sub IPL5
+                                                   //   (gate-array int mask, FF8032 low byte, DI(6:1))
+      $display("  [dbg] after FF8032 write: IEN=%b  isr_hits=%0d", dut.ASIC.IEN, isr_hits);
+      mcd_wram_mode_2m(); wram_to_sub(); gvsync(); mem_wp_0();
+      wram_to_sub(); gvsync();
+      cdc_dtack();               probe("after_dtack");
+      cdc_dma_setup(CDC_DST_WRAM, 2352, PT);  probe("after_setup");
+      set_dma_addr(0);           probe("after_dmaaddr");
+      dttrg();                   probe("after_dttrg");
+      ext_rd8_hi('h12004,fl);
+      $display("  [dma3] 0x22 pre-poll A12004 flags=%02h (exp 07/47)  IEN=%b isr_hits=%0d IPL_N=%b CDC_INT_N=%b",
+               fl, dut.ASIC.IEN, isr_hits, dut.S68K_IPL_N, dut.CDC_INT_N);
+      probe("mid_poll_0");
+      wait_comsta5("DMA3 0x22 WRAM", hung);
+      probe("post_poll");
+      $display("  [dbg] post-poll: isr_hits=%0d IPL_N=%b CDC_INT_N=%b", isr_hits, dut.S68K_IPL_N, dut.CDC_INT_N);
+      if (hung) $display("  CDC DMA3 (WRAM)  HANG");
+      else begin
+         ext_rd8_hi('h12004,fl);
+         ext_rd8_hi('h12004,fl);
+         $display("  [dma3] 0x23 post-DMA A12004 flags=%02h (exp 87)  %s", fl, (fl==8'h87)?"OK":"MISMATCH");
+         $display("  CDC DMA3 (WRAM)  %s", (fl==8'h87)?"PASS":"FLAGS-DIFF");
+      end
       $display("======== done (sub_cycles=%0d) ========", sub_cycles);
       $finish;
    end
-   initial begin #400000000; $display("WATCHDOG"); $finish; end
+   initial begin #900000000; $display("WATCHDOG"); $finish; end
 endmodule
