@@ -262,6 +262,8 @@ architecture rtl of ASIC is
 	signal DMNA_SET 					: std_logic;
 	signal MODE_REQ 					: std_logic;
 	signal DMA_ADDR_SET 				: std_logic;
+	signal DMA_EDT_CLR 				: std_logic;	-- EDT is cleared ONLY by a FF8004 (DD) write, not FF800A
+	signal OLD_CDC_DTEN_N 			: std_logic;	-- EDT latch: edge-detect the CDC transfer-done
 	signal VW_SET 						: std_logic;
 	signal TIME_CLK_CNT 				: unsigned(8 downto 0);
 	signal TIMER 						: unsigned(7 downto 0);
@@ -393,12 +395,36 @@ begin
 			DMA_BYTE <= '0';
 			DMA_RUN <= '0';
 			CDC_HRD <= '0';
+			OLD_CDC_DTEN_N <= '1';
 		elsif rising_edge(CLK) then
 			if EN = '1' then
 				if DMA_ADDR_SET = '1' then
 					DMA_ADDR <= DMAA(18 downto 3) & "00";
-					EDT <= '0';
+					-- Start every DMA word-aligned. An odd-length transfer to word/PRG RAM drops its
+					-- dangling last byte by leaving DMA_BYTE = '1' at the end; without this reset the
+					-- NEXT transfer begins mid-word and both mis-assembles and mis-counts (mcd-verificator
+					-- CDC DMA2 test 05: 2351->2350 failed while 2349->2348 passed only because 2349 ran
+					-- first and left DMA_BYTE set). PCM keeps byte granularity and is unaffected.
+					DMA_BYTE <= '0';
 					DS <= DS_IDLE;
+				end if;
+				-- EDT is cleared ONLY by a write to FF8004 (the DD register), never by the FF800A DMA-
+				-- address write. Both used to pulse DMA_ADDR_SET and clear EDT, so setting the DMA
+				-- address wiped the end-of-transfer flag (mcd-verificator CDC FLAGS test 02: EDT must
+				-- survive an FF800A write and be cleared only by the later FF8004 write, test 05).
+				if DMA_EDT_CLR = '1' then
+					EDT <= '0';
+				end if;
+
+				-- EDT (End of Data Transfer) is a LATCH, not a live view of "CDC idle": it is set when a
+				-- transfer actually completes (CDC deasserts DTEN, 0 -> 1) and cleared ONLY by a write to
+				-- FF8004 (DMA_EDT_CLR, above). The old code forced EDT = '1' whenever the CDC was
+				-- idle, so it read '1' after a DMA setup before the trigger and could not be cleared except
+				-- by starting a transfer (mcd-verificator CDC DMA3 test 01, CDC FLAGS test 05; the flag reads
+				-- only, so this cannot affect the CD data path).
+				OLD_CDC_DTEN_N <= CDC_DTEN_N;
+				if CDC_DTEN_N = '1' and OLD_CDC_DTEN_N = '0' then
+					EDT <= '1';
 				end if;
 				
 				case DS is
@@ -416,7 +442,7 @@ begin
 							if DMA_RUN = '1' and DD(2) = '1' then
 								DSR <= '0';
 							end if;
-							EDT <= '1';
+							-- EDT is latched on the DTEN 0->1 edge above, not set here on idle.
 						end if;
 						
 					when DS_CDC_READ =>
@@ -810,6 +836,7 @@ begin
 			SBA <= (others => (others => '0'));
 			SUB_RST_EXEC <= '0';
 			DMA_ADDR_SET <= '0';
+			DMA_EDT_CLR <= '0';
 			VW_SET <= '0';
 			TIME_CLK_CNT <= (others => '0');
 			TIMER <= (others => '0');
@@ -837,6 +864,7 @@ begin
 				end if;
 				
 				DMA_ADDR_SET <= '0';
+				DMA_EDT_CLR <= '0';
 				VW_SET <= '0';
 				FD_WR <= '0';
 				
@@ -914,6 +942,7 @@ begin
 									DD <= S68K_DI(10 downto 8);
 									DMAA <= (others => '0');
 									DMA_ADDR_SET <= '1';
+									DMA_EDT_CLR <= '1';
 								end if;
 							when "0000011" => null;	--$FF8006 CDC register data (extern)
 							when "0000100" =>	null;	--$FF8008 CDC host data (read only)
@@ -2336,15 +2365,8 @@ begin
 			PCM_DMA_WR <= '0';
 			PCM_DMA_RUN <= '0';
 			PCM_S68K_HALT <= '0';
-			PCM_RD_SEEN <= '0';
-			-- PCM_HALT_WAIT was the only signal in this process left out of the reset. On the
-			-- FPGA it powers up to 0 and the halt handshake works, but in simulation it stays
-			-- 'U': PCMA_DMA_HALT2 does PCM_HALT_WAIT <= PCM_HALT_WAIT + 1 and tests it against
-			-- 1, so with 'U' the test is never true, the state machine never leaves HALT2 and
-			-- never releases PCM_S68K_HALT -- the sub-CPU stays halted forever and any PCM
-			-- destination DMA (DD=4) deadlocks. Reset it so sim matches the hardware power-up
-			-- state; this changes nothing on silicon.
 			PCM_HALT_WAIT <= (others => '0');
+			PCM_RD_SEEN <= '0';
 		elsif rising_edge(CLK) then
 			if EN = '1' then
 				-- PCM wave RAM lives in SDRAM (pcm_mem.sv). A read of the RAM window (FF2000-FF3FFF, S68K_A(13) = 1)
