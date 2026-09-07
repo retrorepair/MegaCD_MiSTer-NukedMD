@@ -1018,3 +1018,65 @@ The two Linux-side changes are no longer only `.patch` files. See
 `tools/main_patches/README.md`: branches `megacd-eject-disc`, `megacd-seek-latency` and the
 combined `megacd-nukedmd` on https://github.com/retrorepair/Main_MiSTer, all off upstream
 `master` (`f8dc68e`), ready to raise as PRs.
+
+---
+
+## Verificator errors: where each one stands (build 46)
+
+Decoded from the real mcd-verificator binary, reproduced in sim where possible.
+
+| test | was | cause | status |
+|---|---|---|---|
+| CDC DMA2 | 05 | odd-length DMA byte-drop (`ccb6fdf`) | **fixed**, confirmed on hardware in build 45 |
+| CDC DMA3 | 01 -> 50 -> hang | see below | **fixed**, A/B proven in sim |
+| CDC FLAGS | 05 -> 12 | FF8004 write cleared EDT but not DSR | fix in build 46, spec-exact |
+| CDC REGS | 01 | CDC address register was 4 bits, LC8951 has 5 | fix in build 46, spec-exact |
+| IRQ TEST | 0A | sub-CPU INT2 service latency | **root-caused, NOT fixed** |
+
+### The DMA3 hang - solved
+
+`testCDC_dma3` sub-test **0x56** (ROM 0x13D42) sets `A12002 = 0xFF` (PRG-RAM write protect on),
+DMAs 0x930 bytes into PRG-RAM at offset 0x9000, then waits on an **unbounded** `COMSTA[3] == 5`
+poll at ROM 0x13DB0 - no iteration limit, so a transfer that never finishes stops the suite
+dead. That is the "CDC DMA3...." with no result seen on hardware.
+
+The PRG-RAM arbiter gated its DMA writes on the write protect and, when blocked, exited via
+`PRS_END` instead of `PRS_DMA_END`. `PR_DMA_RUN` is cleared **only** in `PRS_DMA_END`, so it
+stayed asserted and the DMA machine's `DS_WRITE_WAIT` (DD="101") waited on it forever: DBC
+stopped counting, DTEI never asserted, the sub-CPU's level-5 interrupt never arrived.
+Write protect guards CPU writes, not DMA. Gate removed.
+
+A/B in `sim/cdc/tb_mcd_cdc.sv` (sub-test 0x56):
+```
+gate present : DBC frozen at 092d from the wp_dma probe to the after_0x56 probe,
+               DTEN_N=0, DD=101, 60000-read poll exhausted  -> ERROR 56
+gate removed : "56 PRG-RAM DMA ignores write protect  OK", whole suite PASS
+```
+
+### IRQ TEST 0A - root-caused, not fixed
+
+Sub-test 0x0A (ROM 0x18434) sets `IEN = 4` (IEN(2), the main->sub INT2), then 256 times:
+writes `A12000 = 1` to assert INT2, waits ~6 nops, and requires `A12026 == 2` - i.e. the sub's
+level-2 ISR (BIOS 0x334: `move.w #2,(FF8026)` / `addq.w #1,(FF8028)`) must have run.
+
+Measured decomposition in the bench:
+```
+req -> IPL       0.02 us   gate array latches INT_PEND(2) immediately - NOT the problem
+IPL -> ISR       9.3  us   finishing the current instruction + 68000 exception entry
+ISR -> COMSTA3   3.3  us   the two-instruction ISR
+TOTAL           12.5  us
+```
+The test's real budget is ~8 us, not the ~3 us quoted earlier in this file: after the write it
+executes 6 nops **plus** `movea.l ($196A4),a0` and `move.w ($26,a0),d1`, ~60 cycles at 7.67 MHz.
+So we are ~1.5x over, which is consistent with hardware jittering OK/0A rather than always
+failing.
+
+It is interrupt-ENTRY latency: the exception frame's stack pushes and the vector fetch all go
+to PRG-RAM. That path is already tuned (writes posted with DTACK at issue; reads acknowledged
+when the SDRAM accepts, not when data returns) and its comments document the corruption bugs
+earlier attempts caused - so there is little safe headroom left there.
+
+**CAVEAT before anyone optimises against this number:** the bench's PRG-RAM is a behavioural
+model with an arbitrary 3-cycle latency, not the real SDRAM controller. The *structure* of the
+measurement (entry dominates, PRG-RAM bound) is sound; the absolute 12.5 us is not. Measure on
+hardware before changing the PRG-RAM path.

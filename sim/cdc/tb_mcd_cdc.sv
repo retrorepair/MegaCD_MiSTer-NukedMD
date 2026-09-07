@@ -218,6 +218,22 @@ module tb_mcd_cdc;
    end
 
    // level-2 ISR probe (sub BIOS 0x334: move.w #2,(FF8026); addq.w #1,(FF8028); rte)
+   // ---- INT2 latency decomposition (IRQ TEST sub-test 0x0A) ----
+   // The test allows only ~6 nops on the 7.67 MHz main CPU (~3.1 us) between asserting INT2
+   // at A12000 and reading COMSTA[3].  Break the sub's response into its stages so the excess
+   // can be attributed: gate array latching the request -> IPL asserted -> sub fetches the ISR
+   // -> ISR's write of FF8026 lands.
+   time t_int2_req=0, t_ipl=0, t_isr=0;
+   logic ipl_seen=0, isr_seen=0;
+   always @(posedge CLK) begin
+      if (t_int2_req!=0 && !ipl_seen && dut.S68K_IPL_N!==3'b111) begin ipl_seen<=1; t_ipl<=$time; end
+   end
+   always @(posedge MCLK) begin
+      if (t_int2_req!=0 && !isr_seen && DBG_S68K_AS_N==1'b0 && DBG_S68K_A==24'h000334) begin
+         isr_seen<=1; t_isr<=$time;
+      end
+   end
+
    int  isr2_hits=0; logic [23:0] isr2_a='1;
    always @(posedge MCLK) if(DBG_S68K_AS_N==1'b0 && DBG_S68K_A>=24'h000334 && DBG_S68K_A<=24'h00033e && DBG_S68K_A!==isr2_a) begin isr2_a<=DBG_S68K_A; isr2_hits++; end
 
@@ -295,7 +311,9 @@ module tb_mcd_cdc;
          mcd_rd8('hFF8000, v[7:0]);             // a relay op: sub passes 0x20c, clearing FF8026
          ext_rd('h12026,1'b1,v);
          if (v[7:0]==8'd2) $display("    [irq] iter %0d: COMSTA3 still 2 before the write", i);
+         ipl_seen=0; isr_seen=0; t_ipl=0; t_isr=0;
          ext_wr('h12000, 16'h0100, 1'b1, 1'b0); // UDS, VDI(8)=1 -> INT2 request
+         t_int2_req = $time;
          // the test only waits ~6 nops; measure how long the sub ACTUALLY takes
          ok = 0;
          for (t = 0; t < 4000; t++) begin
@@ -308,6 +326,10 @@ module tb_mcd_cdc;
             err = 'h0A; return;
          end
          if (t > worst) worst = t;
+         if (i < 3) $display("    [irq] iter %0d: req->IPL %0.2f us, IPL->ISR %0.2f us, ISR->COMSTA3 %0.2f us, TOTAL %0.2f us (budget ~3.1)",
+                             i, (t_ipl-t_int2_req)/1000.0, (t_isr-t_ipl)/1000.0,
+                             ($time-t_isr)/1000.0, ($time-t_int2_req)/1000.0);
+         t_int2_req = 0;
       end
       $display("    [irq] INT2 serviced on all 8 iterations; worst = %0d A12026 polls, isr2_hits=%0d", worst, isr2_hits);
       mcd_wr16('hFF8032, 16'h0020);   // restore IEN(5): later DMA-completion waits need the CDC IRQ
