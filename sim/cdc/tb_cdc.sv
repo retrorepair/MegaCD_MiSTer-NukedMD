@@ -3,15 +3,19 @@
 //
 // Instantiates the real rtl/MCD/ASIC.vhd (gate-array DMA machine, sub-CPU
 // register file, word-RAM interface) and rtl/MCD/CDC.vhd (LC8951 host-data
-// transfer machine) exactly as MCD.vhd wires them, but replaces the Altera
-// altsyncram-based RAMs (bram.vhd) with plain behavioural models so no
-// altera_mf library is needed, and preloads the CDC decoder buffer with a
-// known ramp so DMAs move deterministic data with no CD sector decode.
+// transfer machine) exactly as MCD.vhd wires them, with behavioural RAM models
+// (no altera_mf). FAITHFUL VERSION: a real Mode-1 CD sector is fed through the
+// CDC decode path (CD_DI/CD_WR with DECEN=1, sector_words.hex from
+// make_cdc_sector.py) so the host-data (DMA3) EDT/DSR handshake is exercised for
+// real; the COMSTA[3] mailbox flag the verificator polls is modelled (set on the
+// CDC level-5 interrupt edge, cleared on every relayed sub command), so memory-DMA
+// waits are faithful and a never-satisfied poll is reported as a HANG.
 //
-// It replays the mcd-verificator register sequences for the three failing
-// CDC tests (testCDC_dma2 / dma3 / flags) over the sub-CPU (S68K_*) and
-// main-CPU (EXT_*) bus interfaces and prints the SAME pass/fail + error code
-// the verificator would, so a fix can be confirmed in seconds.
+// It replays the mcd-verificator (test_cdc_new.c) CDC test sequences over the
+// sub (S68K_*) and main (EXT_*) buses and prints the SAME pass/fail/error the
+// verificator would. VALIDATED: on build-36 CDC (HEAD) it reproduces the hardware
+// baseline INIT OK / DMA1 OK / FLAGS 05 / DMA2 05 / DMA3 01; FLAGS/DMA2 also match
+// the e22d454 (FLAGS 02) and ccb6fdf (FLAGS/DMA2 OK) variants. See BENCH_SPEC.md.
 //
 //   CDC_DST_MAIN=2  SUB=3  PCM=4  PRG=5  WRAM=7   (ASIC DD[2:0])
 //   A12004/FF8004 high byte = EDT(7) DSR(6) 000 DD(2:0);  EDT=0x80 DSR=0x40
@@ -46,7 +50,7 @@ module tb_cdcram (
 );
    logic [7:0] mem [0:16383];
    integer i;
-   initial for (i=0;i<16384;i=i+1) mem[i] = i[7:0];   // ramp
+   initial for (i=0;i<16384;i=i+1) mem[i] = 8'h00;     // zero-init; filled only by real sector decode
    always @(posedge CLK) begin
       if (we) begin
          mem[{a_wr[13:1],1'b0}] <= d_wr[7:0];
@@ -121,6 +125,10 @@ module tb_cdc;
    wire  [15:0] CDC_RAM_DO;
    wire         CDC_RAM_WE;
 
+   // ---------------- CD sector feed (real decode path) ----------------
+   logic [15:0] CDC_CD_DI = '0;      // bench-driven CD data word
+   logic        CDC_CD_WR = 1'b0;    // bench-driven CD write strobe
+
    // ---------------- word RAM ----------------
    wire  [15:0] WORDRAM0_A, WORDRAM1_A;
    wire  [15:0] WORDRAM0_DI, WORDRAM1_DI;
@@ -185,7 +193,7 @@ module tb_cdc;
       .CS_N(CDC_N), .RS(S68K_A[1]), .RD_N(COE_N), .WR_N(CLWE_N),
       .INT_N(CDC_INT_N),
       .HDO(CDC_HDO), .HRD_N(CDC_HRD_N), .DTEN_N(CDC_DTEN_N), .WAIT_N(CDC_WAIT_N),
-      .CD_DI(16'h0000), .CD_WR(1'b0),
+      .CD_DI(CDC_CD_DI), .CD_WR(CDC_CD_WR),
       .RAM_A_WR(CDC_RAM_A_WR), .RAM_A_RD(CDC_RAM_A_RD),
       .RAM_DI(CDC_RAM_DI), .RAM_DO(CDC_RAM_DO), .RAM_WE(CDC_RAM_WE)
    );
@@ -205,15 +213,43 @@ module tb_cdc;
    );
 
    // ======================================================================
+   //  CD sector feed + faithful COMSTA[3] model (see sim/cdc/BENCH_SPEC.md)
+   // ======================================================================
+   wire en_tick = (S68K_CE_R | S68K_CE_F);
+
+   task automatic wait_en_ticks(input int n);
+      int k; k=0;
+      while (k<n) begin @(posedge CLK); if (en_tick) k++; end
+   endtask
+
+   // 1176-word canonical Mode-1 sector (little-endian words) from sector_words.hex
+   logic [15:0] sector_word [0:1175];
+   initial $readmemh("sector_words.hex", sector_word);
+
+   // one CD data word, CE-gated so the CDC's EN-sampled CD_WR edge is not dropped
+   task automatic feed_word(input [15:0] w);
+      CDC_CD_DI = w;  CDC_CD_WR = 1'b1;  wait_en_ticks(2);
+      CDC_CD_WR = 1'b0;                  wait_en_ticks(2);
+   endtask
+
+   // COMSTA[3] = A12026 = CS(3), SUB-written on hardware. No sub-CPU here, so model it:
+   // set to 5 on the CDC level-5 (DTEI/DECI) interrupt edge (CDC_INT_N 1->0) if IEN(5);
+   // cleared to 0 at the start of every relayed sub command (cmd_rx STA_IRQ<=0 -> every S68K cycle).
+   logic [7:0] comsta3 = 0;
+   logic       ien5    = 1'b1;
+   logic       cint_old = 1'b1;
+   always @(posedge CLK) if (en_tick) begin
+      cint_old <= CDC_INT_N;
+      if (CDC_INT_N==1'b0 && cint_old==1'b1 && ien5) comsta3 <= 8'd5;
+   end
+
+   // ======================================================================
    //  Reference buffer + word-RAM snoop helpers
    // ======================================================================
-   localparam int PT = 0;                 // CDC buffer read pointer used everywhere
-
-   function automatic [7:0] ramp(input int addr);
-      ramp = addr[7:0];                   // matches tb_cdcram preload
-   endfunction
+   int PT = 0;                            // CDC buffer read pointer (from HEAD/PT readback in INIT)
+   logic [7:0] gbuff [0:2351];            // golden buffer captured from the INIT MAIN DMA readback
    function automatic [7:0] buffref(input int i);   // == verificator buff[i]
-      buffref = ramp(PT + i);
+      buffref = gbuff[i];
    endfunction
    // byte b of word RAM (2M interleave: even words -> bank0, odd -> bank1)
    function automatic [7:0] wram_byte(input int b);
@@ -234,6 +270,7 @@ module tb_cdc;
    //  Bus tasks
    // ======================================================================
    localparam int TIMEOUT = 6000000;      // CLKs (a full 2352-byte DMA needs tens of thousands)
+   localparam int POLL_BUDGET = 4000000;  // CLKs; a real 2352 DMA/decode completes in far fewer
 
    // ---- sub-CPU (S68K) ----
    task automatic s68k_setaddr(input int addr);
@@ -245,6 +282,7 @@ module tb_cdc;
    task automatic s68k_wr8(input int addr, input [7:0] val);
       int t;
       @(posedge CLK); #1;
+      comsta3 = 0;                        // cmd_rx: sub clears STA_IRQ at every relayed command
       s68k_setaddr(addr);
       if (addr[0]) begin S68K_DO_TB = {8'h00,val}; S68K_UDS_N=1'b1; S68K_LDS_N=1'b0; end
       else         begin S68K_DO_TB = {val,8'h00}; S68K_UDS_N=1'b0; S68K_LDS_N=1'b1; end
@@ -258,6 +296,7 @@ module tb_cdc;
    task automatic s68k_wr16(input int addr, input [15:0] val);
       int t;
       @(posedge CLK); #1;
+      comsta3 = 0;                        // cmd_rx: sub clears STA_IRQ at every relayed command
       s68k_setaddr(addr);
       S68K_DO_TB = val; S68K_UDS_N=1'b0; S68K_LDS_N=1'b0;
       S68K_RNW = 1'b0; S68K_AS_N = 1'b0;
@@ -270,6 +309,7 @@ module tb_cdc;
    task automatic s68k_rd(input int addr, input bit word, output [15:0] data);
       int t;
       @(posedge CLK); #1;
+      comsta3 = 0;                        // cmd_rx: sub clears STA_IRQ at every relayed command
       s68k_setaddr(addr);
       S68K_RNW = 1'b1;
       if (word)        begin S68K_UDS_N=1'b0; S68K_LDS_N=1'b0; end
@@ -343,6 +383,9 @@ module tb_cdc;
    task automatic cdc_reg_write(input [7:0] val);
       s68k_wr8('hFF8007, val);
    endtask
+   task automatic cdc_reg_read(output [7:0] val);   // CDC data port (FF8007, odd/low byte)
+      logic [15:0] d; s68k_rd('hFF8007, 1'b0, d); val = d[7:0];
+   endtask
    task automatic cdc_dtack();
       cdc_reg_select(CDC_DTACK_R); cdc_reg_write(8'h00);
    endtask
@@ -376,6 +419,7 @@ module tb_cdc;
       int t; t=0;
       while (CDC_INT_N!==1'b0 && t<TIMEOUT) begin @(posedge CLK); t++; end
       ok = (t < TIMEOUT);
+      if (ok) repeat (64) @(posedge CLK);   // let the final DMA word drain to its destination RAM
    endtask
 
    task automatic set_ifctrl(input [7:0] v);
@@ -387,6 +431,73 @@ module tb_cdc;
       cdc_reg_select(CDC_CTRL0); cdc_reg_write(8'h00); cdc_reg_write(8'h00);
       set_ifctrl(8'h00);
       set_ifctrl(IFCTRL_DOUTEN | IFCTRL_DTEIEN);
+   endtask
+
+   // ---- decoder on/off + sector feed (real CDC data path) ----
+   task automatic cdc_decoder_on();
+      cdc_reg_select(8'h0F); cdc_reg_write(8'h00);   // R15 RESET
+      cdc_reg_select(8'h0A); cdc_reg_write(8'h84);   // CTRL0 = DECEN(80)|WRRQ(04) -> AR auto-inc to 11(CTRL1)
+                             cdc_reg_write(8'hC0);   // CTRL1 = SYIEN(80)|SYDEN(40)
+      cdc_reg_select(8'h01); cdc_reg_write(8'h62);   // IFCTRL = DTEIEN(40)|DECIEN(20)|DOUTEN(02)
+   endtask
+   task automatic cdc_decoder_off();
+      cdc_reg_select(8'h0A); cdc_reg_write(8'h00);   // CTRL0 = 0
+   endtask
+   task automatic feed_sector();
+      int i;
+      for (i=0;i<1176;i++) feed_word(sector_word[i]);
+   endtask
+
+   // ---- faithful polls: read-until-condition-or-HANG ----
+   task automatic wait_comsta5(input string label, output bit hung);
+      int t; t=0; hung=0;
+      while (comsta3 != 8'd5) begin @(posedge CLK); if (++t>=POLL_BUDGET) begin hung=1; break; end end
+      if (hung) $display("  >>> HANG @ %s (COMSTA3 poll, %0d clk)", label, t);
+      else repeat (64) @(posedge CLK);   // let the final DMA word drain to its destination RAM
+   endtask
+   // models while((A12004 & EDT)==0) { ... } with a budget
+   task automatic wait_edt(input string label, output bit hung);
+      int t; logic [7:0] v; t=0; hung=0;
+      forever begin
+         ext_rd8_hi('h12004, v);
+         if (v & EDT) break;
+         @(posedge CLK); if (++t>=POLL_BUDGET) begin hung=1; break; end
+      end
+      if (hung) $display("  >>> HANG @ %s (A12004&EDT poll, last=%02h)", label, v);
+   endtask
+
+   // ---- INIT: feed a real sector, read HEAD/PT, capture the golden buffer ----
+   //   builds gbuff[] from the MAIN DMA readback and validates the SEGA header.
+   task automatic test_cdc_init(output int err);
+      int i; bit hung; logic [7:0] h0,h1,h2,h3,ptl,pth; logic [15:0] d16;
+      err = 0;
+      cdc_decoder_on();
+      feed_sector();
+      wait_comsta5("INIT decode", hung); if (hung) begin err='h100; return; end
+      // read HEAD0..3, PTL, PTH (AR=4, auto-inc)
+      cdc_reg_select(8'h04);
+      cdc_reg_read(h0); cdc_reg_read(h1); cdc_reg_read(h2); cdc_reg_read(h3);
+      cdc_reg_read(ptl); cdc_reg_read(pth);
+      $display("    [init] HEAD=%02h %02h %02h %02h  PT=%02h%02h", h0,h1,h2,h3,pth,ptl);
+      if ({h3,h2,h1,h0} !== 32'h01000200) $display("    [init] note: HEAD != 00 02 00 01");
+      PT = {pth,ptl};
+      // decoder OFF, arm host out, DMA the whole sector to WORD RAM and snoop it as the
+      // golden buffer (byte-exact; the internal DMA is reliable where the first CPU A12008
+      // read is not). All later WRAM/PRG comparisons reference this same gbuff.
+      cdc_decoder_off();
+      set_ifctrl(IFCTRL_DOUTEN | IFCTRL_DTEIEN);
+      wram_to_sub();
+      wram_fill(2352, 8'h5A);
+      cdc_dtack();
+      cdc_dma_setup(CDC_DST_WRAM, 2352, PT);
+      set_dma_addr(0);
+      dttrg();
+      wait_comsta5("INIT wram capture", hung); if (hung) begin err='h101; return; end
+      for (i=0;i<2352;i++) gbuff[i]=wram_byte(i);
+      $display("    [init] buff[0..7]=%02h %02h %02h %02h %02h %02h %02h %02h",
+               gbuff[0],gbuff[1],gbuff[2],gbuff[3],gbuff[4],gbuff[5],gbuff[6],gbuff[7]);
+      if (gbuff[4]!=8'h53 || gbuff[5]!=8'h45 || gbuff[6]!=8'h47 || gbuff[7]!=8'h41)
+         $display("    [init] WARNING: SEGA tag not found in golden buffer");
    endtask
 
    // ======================================================================
@@ -525,12 +636,18 @@ module tb_cdc;
 
       $display("======== CDC/DMA ModelSim bench ========");
 
+      test_cdc_init(e); if(e) begin $display("  CDC INIT     ERROR %02h",e); fails++; end else $display("  CDC INIT     OK");
       test_dma1(e);  cdc_end(); if(e) begin $display("  CDC DMA1     ERROR %02h",e); fails++; end else $display("  CDC DMA1     PASS");
       test_flags(e); cdc_end(); if(e) begin $display("  CDC FLAGS    ERROR %02h",e); fails++; end else $display("  CDC FLAGS    PASS");
       test_dma2(e);  cdc_end(); if(e) begin $display("  CDC DMA2     ERROR %02h",e); fails++; end else $display("  CDC DMA2     PASS");
       test_dma3_main(e); cdc_end(); if(e) begin $display("  CDC DMA3     ERROR %02h",e); fails++; end else $display("  CDC DMA3     PASS");
 
       $display("======== %0d failure(s) ========", fails);
+      // Acceptance anchor: build-36 CDC (HEAD) must read INIT OK / DMA1 OK / FLAGS 05 / DMA2 05 /
+      // DMA3 01 (== hardware). FLAGS/DMA2 also match e22d454 (FLAGS 02) and ccb6fdf (FLAGS/DMA2 OK).
+      // CAVEAT: test_dma3_main is TRUNCATED to sub-tests 01-07; the deep latent DMA3 hang that the
+      // e22d454/ccb6fdf variants show on hardware is NOT yet reproduced -- transcribe the full
+      // testCDC_dma3 (0x10..0x63) with wait_comsta5 poll-timeouts to reach it (see BENCH_SPEC.md).
       $finish;
    end
 
