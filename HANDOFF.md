@@ -943,3 +943,32 @@ state with the `PCMA`/`DS`/`PCM_HALT_WAIT` probe in `test_pcm_dma()` before chan
 3. Re-run the full suite on hardware. Expect DMA3 to get past `01` for the first time.
 
 Nothing here needed an RTL change to discover, and none was made; the tree is baseline build-36.
+
+#### CORRECTION to the section above: the PCM deadlock is a SIMULATION artifact
+
+Probing the stuck state directly (`PCMA=3` = `PCMA_DMA_HALT2`, `PCM_HALT_WAIT=x`) shows the real
+cause, and it is **not** a hardware defect, so the conclusion above is wrong and is retracted:
+
+`PCM_HALT_WAIT` (ASIC.vhd:295) is declared with no initialiser and is the one signal in that
+process missing from the reset branch. `PCMA_DMA_HALT2` does
+`PCM_HALT_WAIT <= PCM_HALT_WAIT + 1; if PCM_HALT_WAIT = 1 then <release halt>`, so with `'U'`
+the increment stays `'U'`, the comparison is never true, the machine never leaves HALT2 and
+never clears `PCM_S68K_HALT` — the sub-CPU stays halted forever. On the FPGA the register powers
+up to 0 and the handshake works (which is why PCM DMA works in games), so this deadlock only
+ever happens in simulation. Fixed by resetting `PCM_HALT_WAIT` — a no-op on silicon.
+
+Measured evidence that it is not the CPU/clock: `AS_N` is high with 2 edges seen after the halt
+(so the CPU is not frozen mid-cycle) and `CLK_12M_R` free-runs (`EN <= ENABLE` ASIC.vhd:304,
+`CLK_CNT` on `CLK50_EN` ASIC.vhd:308-316).
+
+**So the hardware DMA3 hang is still NOT reproduced.** What is established:
+- build-36 (shipping): `testCDC_dma3` -> `ERROR 01` (flags 82 vs 02). Matches hardware.
+- `ccb6fdf`: `01`-`07` PASS, `10`-`16` PASS, `22/23` PASS, `24/25` PASS. Everything transcribed
+  and reachable so far passes; `26`+ needs the reset fix above before it means anything.
+Still untranscribed: the sub-tests after the trailing WRAM DMA (ROM 0x132F8 onward, which begin
+`pea $09B0` — a different PT, i.e. buffer-offset/wrap cases).
+
+**Method note for whoever continues:** four separate "hangs" in this bench have now turned out
+to be the bench or an X, not the RTL (poll budget too small; relay returning before the sub had
+executed; main reads faster than a real 68000; and this uninitialised register). Probe the actual
+internal state before concluding anything about the hardware.

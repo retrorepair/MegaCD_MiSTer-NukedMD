@@ -2337,6 +2337,14 @@ begin
 			PCM_DMA_RUN <= '0';
 			PCM_S68K_HALT <= '0';
 			PCM_RD_SEEN <= '0';
+			-- PCM_HALT_WAIT was the only signal in this process left out of the reset. On the
+			-- FPGA it powers up to 0 and the halt handshake works, but in simulation it stays
+			-- 'U': PCMA_DMA_HALT2 does PCM_HALT_WAIT <= PCM_HALT_WAIT + 1 and tests it against
+			-- 1, so with 'U' the test is never true, the state machine never leaves HALT2 and
+			-- never releases PCM_S68K_HALT -- the sub-CPU stays halted forever and any PCM
+			-- destination DMA (DD=4) deadlocks. Reset it so sim matches the hardware power-up
+			-- state; this changes nothing on silicon.
+			PCM_HALT_WAIT <= (others => '0');
 		elsif rising_edge(CLK) then
 			if EN = '1' then
 				-- PCM wave RAM lives in SDRAM (pcm_mem.sv). A read of the RAM window (FF2000-FF3FFF, S68K_A(13) = 1)
