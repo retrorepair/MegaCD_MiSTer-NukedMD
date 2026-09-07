@@ -772,3 +772,45 @@ Always multi-seed before judging a netlist change; commit the winning SEED so th
 netlist, so it has no latch-cell overhead to convert and little synthesis benefit; on the 53.7 MHz
 (non-critical) domain. Recommend discussing whether a 1:1 68000 rewrite is wanted before spending
 the multi-hour agent on a near-identity transform. The sub-CPU 68000 is the same Nuked m68kcpu.
+
+## Builds 41-43 (2026-09-07) — hardware test of build 40; CDC EDT change reverted; core un-hung
+Deployed build 40 (full 1:1 conversion) + patched Main (Eject Disc, f7fa87d4) to hardware and ran
+the mcd-verificator with a disc. Findings:
+
+- **Build 40 HUNG at CDC DMA3.** Telemetry showed the core alive (seq++) but the sub-CPU idle-
+  looping FF8010/PRG while the MAIN 68000 (verificator) was wedged in the DMA3 host-data test.
+- **Root cause: commit e22d454 (the build-38 "EDT is a latched flag" edge-latch) hangs DMA3 when a
+  disc is mounted.** It was validated WITHOUT a disc (DMA3 showed 03); with a disc the verificator's
+  host-data poll never completes. Present in builds 38/40/41/42 -> all hang. Tonight's DMA_BYTE reset
+  (ccb6fdf) additionally hangs DMA3 (it fixed DMA2 05->OK but the shared DMA_ADDR_SET pulse corrupts
+  the DMA3 transfer). Isolated by: build 41 (revert DMA_EDT_CLR, keep DMA_BYTE) still hung; build 42
+  (revert DMA_BYTE too, keep e22d454 EDT latch) still hung; **build 36 (predates e22d454) COMPLETES**
+  with the current Main+disc (FLAGS 05, DMA2 05, DMA3 01, DMA1 OK, "Diagnostics complete").
+- **Fix: reverted ASIC.vhd to build 36 CDC** (git checkout 3e6e1aa -- rtl/MCD/ASIC.vhd): dropped
+  e22d454 (EDT edge-latch) AND ccb6fdf (DMA_BYTE/DMA_EDT_CLR); kept all other CDC fixes (CDD 75 Hz
+  retransmit, PRG/wave-RAM ack). **Build 43 COMPLETES the suite, no hang** (FLAGS 05, DMA2 05,
+  DMA3 01). Release rbf now build 43 (releases/..20260907, md5 041eed47), seed4, -2.085 @107.
+
+**State of things on hardware (build 43, confirmed):**
+- 1:1 NukedMD conversions (FM/VDP/Z80/tmss/ioc/arb) RUN CORRECTLY on silicon (core boots, video +
+  all non-CDC tests pass). This validates the whole conversion effort incl. the VDP on hardware.
+- Patched Main (Eject Disc R[38] + seek-latency) booted fine.
+- CDC verificator errors are UNFIXED, back to build-36 level: FLAGS 05, DMA2 05, DMA3 01. CDC REGS 01
+  (correct Model 1/2) and PAL VAR/IRQ/REG windows are expected, not bugs. IRQ 0A (NTSC) jitters
+  OK/0A run-to-run.
+
+**CDC accuracy is deferred to a proper investigation.** The sim bench (sim/cdc) gives FALSE PASSES
+(passed the DMA3 that hangs, failed the DMA2 that passes) -- it stubs the sector-decode path. A
+faithful bench must model the CDC decoder buffer filled by real sector reads and replay the
+verificator's exact A12004/A12008/FF8004/FF800A sequence. See docs/CDC_ACCURACY_TODO.md. Do NOT
+reintroduce e22d454 or the DMA_ADDR_SET DMA_BYTE reset without such a bench proving DMA3 completes
+with a disc.
+
+**107 MHz timing:** analysed exhaustively (docs/TIMING_107MHZ_ANALYSIS.md). No faithful SDC exception
+exists (io_address & VD free-run every edge); fitter knobs are near-maxed and adding effort
+multipliers REGRESSED to -4.994. Best remains seed selection (-1.971 seed4 on the build-40 netlist).
+A seed sweep was interrupted to prioritise the CDC hang fix. Genuine closure needs RTL pipelining
+(behaviour change, out of scope) or a lower clock -- a human decision.
+
+**Note:** Quartus inlined sys.tcl/files.qip into MegaCD.qsf during the rapid build/kill cycles (the
+known 125085 hazard); restored the clean 68-line qsf before committing.

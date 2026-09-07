@@ -85,3 +85,36 @@ ccb6fdf) make all four pass: `DMA1 PASS, FLAGS PASS, DMA2 PASS, DMA3 PASS, 0 fai
 
 Both structural, no timing hacks; match GPGX-408 / jgenesis-105. Hardware confirmation pending on
 build 39 (run the verificator with the disc mounted).
+
+## HARDWARE REALITY (2026-09-07) — the sim "RESOLVED" above was WRONG; all CDC changes reverted
+
+Deployed to hardware and ran the verificator with a disc (Final Fight CD, NTSC). The sim-bench
+"fixes" above do NOT hold on real hardware, and worse, an EARLIER committed change hangs the suite:
+
+- **The build-38 EDT edge-latch (commit e22d454) HANGS CDC DMA3 when a disc is mounted.** That
+  commit made EDT an edge-latched flag ("set on the CDC transfer-done edge"); it was validated
+  without a disc (where DMA3 showed 03), but with a disc the verificator's DMA3 host-data poll
+  never completes -> hard hang, "Diagnostics" never finishes. Present in builds 38/40/41/42, all hang.
+- **Tonight's DMA_BYTE reset (ccb6fdf) fixed DMA2 on hardware (05 -> OK) but ALSO hangs DMA3**,
+  because the verificator writes FF8004/FF800A (pulsing the shared DMA_ADDR_SET) during the DMA3
+  host-data test and the reset corrupts that transfer. DMA2's fix and DMA3's hang are the same line.
+- **Build 36 (no EDT edge-latch, no DMA_BYTE reset) COMPLETES with the current Main + disc:**
+  COLOR/VAR/REG/PROG/WORD OK, CDC INIT OK, DMA1 OK, FLAGS 05, DMA2 05, DMA3 01, "Diagnostics complete."
+
+Decision: reverted ASIC.vhd to build 36's CDC (git checkout 3e6e1aa -- rtl/MCD/ASIC.vhd), i.e.
+dropped e22d454 (EDT edge-latch) AND ccb6fdf (DMA_BYTE/DMA_EDT_CLR). Kept all other CDC fixes
+(CDD 75 Hz retransmit for CDC INIT, PRG-RAM/wave-RAM acknowledge). Result: the core no longer hangs.
+
+Verificator CDC status after the revert (build 43): FLAGS 05, DMA2 05, DMA3 01, CDC REGS 01
+(correct Model 1/2). These are UNFIXED but the suite completes. CDC REGS 01 and the PAL VAR/IRQ/REG
+windows are correct/expected, not bugs.
+
+### The real lesson and the right next step
+The sim bench (sim/cdc/tb_cdc.sv) gives FALSE PASSES: it "passed" DMA3 that hangs on hardware and
+"failed" DMA2 that passes. It stubs the CD sector-decode path and drives an approximated register
+sequence, so it does not exercise the true host-data EDT/DSR handshake the verificator depends on.
+Fixing CDC FLAGS/DMA2/DMA3 faithfully requires a bench that (a) models the CDC decoder buffer being
+filled by real sector reads (DECEN/CD_WR), and (b) replays the verificator's EXACT A12004/A12008/
+FF8004/FF800A sequence for each test, checking EDT/DSR/DBC against the values in test_cdc_new.c.
+Only iterate the RTL against THAT. Do NOT reintroduce e22d454's edge-latch or the DMA_ADDR_SET
+DMA_BYTE reset without such a bench proving they complete DMA3 with a disc.
