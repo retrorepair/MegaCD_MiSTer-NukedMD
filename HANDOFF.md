@@ -889,3 +889,57 @@ bash sim/cdc/compile_mcd.sh
 ```
 To test a variant: `git checkout ccb6fdf -- rtl/MCD/ASIC.vhd`, compile, then
 `git checkout HEAD -- rtl/MCD/ASIC.vhd` (the sim runs from the compiled `work` library).
+
+### THE DMA3 HANG IS A PRE-EXISTING PCM-DMA DEADLOCK, NOT THE EDT LATCH
+
+Disassembling the real `testCDC_dma3` out of `mcd-verificator.bin` (ROM `0x12E80`-`0x132F8`)
+showed the test does **not** stop at sub-test `0x23`. It goes on to run three more DMAs, each
+behind its own unbounded `while (COMSTA[3] != 5)` poll, to destinations neither bench had ever
+touched:
+
+| sub-test | ROM | destination | ASIC path |
+|---|---|---|---|
+| 0x22/0x23 | 0x1310A | word RAM (DD=7) | `WR_DMA_RUN` |
+| 0x24/0x25 | 0x1317C | **PRG-RAM (DD=5)**, FF800A=0x4000 | `PR_DMA_RUN` |
+| 0x26/0x27 | 0x131EA | **PCM (DD=4)** | `PCM_DMA_RUN` |
+| (trailing) | 0x132B8 | word RAM again | `WR_DMA_RUN` |
+
+Running these in the sub-CPU bench:
+- `ccb6fdf` variant: `01`-`07` PASS, `10`-`16` PASS, `22/23` PASS, `24/25` PASS (PRG-RAM fine),
+  then **`26` HANGS** — and the sub-CPU stops answering the COMCMD relay.
+- **baseline build-36 (what ships today) hangs on exactly the same PCM DMA.** Because build-36
+  aborts `testCDC_dma3` at sub-test `01` (its EDT inaccuracy) it never *reaches* the PCM DMA, so
+  the deadlock stays hidden. Run standalone (`test_pcm_dma()`), build-36 deadlocks identically:
+```
+[pcm] after poll  PCM_DMA_RUN=1 PCM_S68K_HALT=1 S68K_HALT_N=0
+                  DTEN_N=0 DBC=092e sub_A=00020c
+```
+`DBC` moved 0x092F->0x092E, i.e. it froze after **one byte**, with the sub-CPU halted
+(`S68K_HALT_N=0`) and never released, parked at 0x20C in the cmd_rx ack-wait loop.
+
+**So reverting `e22d454`/`ccb6fdf` (build 43) never fixed anything** — it only re-hid this
+deadlock behind the earlier `ERROR 01`. The EDT latch is a genuine accuracy *fix*; restoring it
+is what lets `testCDC_dma3` get far enough to reach the real bug.
+
+**Where the bug is.** PCM is the only DMA destination that steals a sub-CPU bus cycle
+(ASIC.vhd:2367-2412). `DMA_PCM_SEL <= '1' when DD="100" and DS=DS_WRITE` starts it, then:
+```
+PCMA_DMA_HALT0: wait S68K_AS_N='1'                      -> HALT1
+PCMA_DMA_HALT1: wait S68K_AS_N='0'; PCM_S68K_HALT<='1'  -> HALT2
+PCMA_DMA_HALT2: wait S68K_AS_N='1' twice; release halt  -> DMA_WRITE -> END
+```
+`PCM_S68K_HALT` reaches the real gate-level 68000's `HALT_i` (MCD.vhd:249, MC68K.vhd:117/131).
+The observed frozen state has `PCM_S68K_HALT=1` stuck. Note `AS_N` is NOT frozen low (measured:
+`AS_N=1`, 2 edges seen after the halt) and `CLK_12M_R` free-runs (`EN <= ENABLE`, ASIC.vhd:304;
+`CLK_CNT` advances on `CLK50_EN`, ASIC.vhd:308-316) — so the stall is in the HALT0/HALT1/HALT2
+handshake's assumptions about the halted CPU's `AS_N`, not a stopped clock. **Pin the exact stuck
+state with the `PCMA`/`DS`/`PCM_HALT_WAIT` probe in `test_pcm_dma()` before changing any RTL.**
+
+**Do this next, in order:**
+1. Fix the PCM DMA halt handshake so a PCM-destination DMA completes.
+   `sim/cdc/tb_mcd_cdc.sv test_pcm_dma()` reproduces it standalone in ~3 minutes on either build.
+2. Then RESTORE `ccb6fdf` (`git checkout ccb6fdf -- rtl/MCD/ASIC.vhd`) — it is the correct EDT
+   behaviour and fixes DMA3 `01`/`02` and the FLAGS tests.
+3. Re-run the full suite on hardware. Expect DMA3 to get past `01` for the first time.
+
+Nothing here needed an RTL change to discover, and none was made; the tree is baseline build-36.
