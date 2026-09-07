@@ -218,6 +218,21 @@ module tb_mcd_cdc;
    // Sub-side (FF80xx) accesses go through the real sub-CPU relay; main-side (A120xx)
    // are direct.  PTv is the buffer pointer captured by INIT.
    // ---------------------------------------------------------------------------
+   // VERIFIED byte-for-byte against the real mcd-verificator.bin main program
+   // (testCDC_dma3 at ROM 0x12E80..0x130F4).  Key anchors from that disassembly:
+   //   0x12EA2 cmpi.b #$02,(A12004)          test 01
+   //   0x12EB0 mcdWrite8(FF8007,0) + 4 nops  DTTRG (relayed), short settle
+   //   0x12ED8 move.l #$092A,d0 / subq #2 / bpl   -> 1174 MAIN host reads
+   //   0x12EEC 42 / 0x12F04 C2 / 0x12F1C 82 / 0x12F34 82   tests 03-06
+   //   0x12F40 mcdRead8(FF8004) cmpi.b #$82  test 07
+   //   0x12F78 03  0x12F9A 43                tests 10,11 (SUB dest)
+   //   0x12FA8 movea.w #$092A,a2 / mcdRead16(FF8008) / subq #2 / bge -> 1174 RELAYED reads
+   //   0x12FD0 43 / 0x12FF2 C3 / 0x1300E 83 / 0x1302A 83 / 0x13036 (A12004)=83  tests 12-16
+   //   0x1306A movea.w #$092E,a2 -> 1176 relayed reads; 0x13082 (A12004)=42  test 20
+   //   0x13090 move.l #$092E,d0  -> 1176 MAIN reads
+   //   0x130C8 1176 MAIN reads; 0x130DC (A12004)=43 test 21; 0x130E8 1176 relayed reads
+   // Note the SUB drains are individual mcdRead16 calls -- the BIOS burst commands (5/6)
+   // are NOT used here, so ~3500 relay round-trips are genuinely what hardware performs.
    task automatic test_dma3(input int PTv, output int err);
       int i; bit hung2; logic [15:0] t16; logic [7:0] t8;
       err = 0;
