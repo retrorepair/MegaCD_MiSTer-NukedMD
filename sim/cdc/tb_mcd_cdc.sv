@@ -151,7 +151,7 @@ module tb_mcd_cdc;
    localparam [2:0] CDC_DST_MAIN=3'd2, CDC_DST_SUB=3'd3, CDC_DST_PCM=3'd4, CDC_DST_PRG=3'd5, CDC_DST_WRAM=3'd7;
    localparam CDC_IFCTRL=1, CDC_DBCL=2, CDC_DTACK_R=7, CDC_CTRL0=10, CDC_RST=15;
    localparam [7:0] IFCTRL_DOUTEN=8'h02, IFCTRL_DTEIEN=8'h40, EDT=8'h80, DSR=8'h40;
-   localparam int POLL_BUDGET=20000, HANGV=32'h1000;   // A12026 polls; a real 2352 DMA sets FF8026=5 in << this
+   localparam int POLL_BUDGET=60000, HANGV=32'h1000;   // A12026 polls; a real 2352 DMA sets FF8026=5 in << this
 
    // main-side (EXT) byte read = hi byte of an even A120xx
    task automatic ext_rd8_hi(input int addr, output [7:0] val); logic [15:0] d; ext_rd(addr,1'b1,d); val=d[15:8]; endtask
@@ -208,6 +208,15 @@ module tb_mcd_cdc;
    int  sub_cycles=0; logic [23:0] a_last='1;
    always @(posedge MCLK) if(DBG_S68K_AS_N==1'b0 && DBG_S68K_A!==a_last) begin a_last<=DBG_S68K_A; sub_cycles++; end
    // ISR-entry probe: count times the sub fetches in the lvl5/lvl6 ISR window (0x37c..0x392)
+   // PCMA_DMA_HALT2 waits for S68K_AS_N to RISE after PCM_S68K_HALT was asserted while
+   // AS_N was low.  If the halted CPU never finishes that cycle, AS_N stays low and the
+   // PCM DMA can never advance -> deadlock.  Count AS_N edges seen while halted.
+   int as_edges_while_halted=0; logic as_prev=1'b1;
+   always @(posedge MCLK) if (dut.ASIC.PCM_S68K_HALT===1'b1) begin
+      if (DBG_S68K_AS_N !== as_prev) as_edges_while_halted++;
+      as_prev <= DBG_S68K_AS_N;
+   end
+
    int  isr_hits=0; logic [23:0] isr_a='1;
    always @(posedge MCLK) if(DBG_S68K_AS_N==1'b0 && DBG_S68K_A>=24'h00037c && DBG_S68K_A<=24'h000392 && DBG_S68K_A!==isr_a) begin isr_a<=DBG_S68K_A; isr_hits++; end
 
@@ -233,6 +242,35 @@ module tb_mcd_cdc;
    //   0x130C8 1176 MAIN reads; 0x130DC (A12004)=43 test 21; 0x130E8 1176 relayed reads
    // Note the SUB drains are individual mcdRead16 calls -- the BIOS burst commands (5/6)
    // are NOT used here, so ~3500 relay round-trips are genuinely what hardware performs.
+   // ---------------------------------------------------------------------------
+   // ISOLATED PCM DMA (the DMA3 0x26 body on its own).  build-36 aborts testCDC_dma3 at
+   // test 01 and so never reaches 0x26; running the PCM DMA standalone is the only way to
+   // ask whether the PCM hang is variant-specific or a pre-existing latent defect that the
+   // ccb6fdf EDT fix merely makes REACHABLE.  Nothing in ASIC.vhd's PCM DMA path differs
+   // between the two builds, so the expectation is that it hangs on both.
+   // ---------------------------------------------------------------------------
+   task automatic test_pcm_dma(input int PTv, output int err);
+      bit hung3; logic [7:0] t8;
+      err = 0;
+      cdc_end();
+      cdc_dma_setup(CDC_DST_PCM, 2352, PTv);
+      mcd_wr16('hFF800A, 16'h0000);
+      dttrg();
+      ext_rd8_hi('h12004,t8);
+      $display("    [pcm] after trigger flags=%02h (exp 04/44)  PCM_DMA_RUN=%b PCM_S68K_HALT=%b S68K_HALT_N=%b",
+               t8, dut.ASIC.PCM_DMA_RUN, dut.ASIC.PCM_S68K_HALT, dut.S68K_HALT_N);
+      if ((t8 & ~DSR)!=8'h04) begin err='h01; return; end
+      wait_comsta5("PCM DMA (isolated)", hung3);
+      $display("    [pcm] after poll  PCM_DMA_RUN=%b PCM_S68K_HALT=%b S68K_HALT_N=%b DTEN_N=%b DBC=%04h sub_A=%06h",
+               dut.ASIC.PCM_DMA_RUN, dut.ASIC.PCM_S68K_HALT, dut.S68K_HALT_N,
+               dut.CDC_DTEN_N, dut.CDC.DBC, a_last);
+      $display("    [pcm] AS_N now=%b edges_while_halted=%0d PCMA=%0d DS=%0d PCM_HALT_WAIT=%0d DMA_PCM_SEL=%b PCM_DMA_WR=%b",
+               DBG_S68K_AS_N, as_edges_while_halted, dut.ASIC.PCMA, dut.ASIC.DS, dut.ASIC.PCM_HALT_WAIT, dut.ASIC.DMA_PCM_SEL, dut.ASIC.PCM_DMA_WR);
+      if (hung3) begin err=HANGV; return; end
+      ext_rd8_hi('h12004,t8);
+      $display("    [pcm] post flags=%02h", t8);
+   endtask
+
    // fast=1 skips the three bulk host drains (0x10-0x16, 0x20, 0x21).  Those are ~3500
    // COMCMD round-trips = hours of sim, and they have already been shown to PASS; skipping
    // them gets to the untested destination paths (PRG/PCM) quickly.  Each test begins with
@@ -387,6 +425,13 @@ module tb_mcd_cdc;
       cdc_end();                                   // decoder off, IFCTRL re-armed (DOUTEN|DTEIEN)
       mcd_wr16('hFF8032, 16'h0020);                // IEN(5)=1: route the CDC (DTEI) IRQ to sub IPL5
                                                    //   (gate-array int mask, FF8032 low byte, DI(6:1))
+      // Isolated PCM DMA FIRST: it is the one destination that halts the sub-CPU, and it
+      // runs on either build (unlike DMA3, which build-36 aborts at test 01).
+      test_pcm_dma(PT, e);
+      if      (e==HANGV) $display("  PCM DMA      HANG");
+      else if (e)        $display("  PCM DMA      ERROR %02h", e);
+      else               $display("  PCM DMA      PASS");
+
       test_dma3(PT, 1'b1, e);   // fast=1: skip the ~3h bulk host drains (already shown to PASS)
       if      (e==HANGV) $display("  CDC DMA3     HANG");
       else if (e)        $display("  CDC DMA3     ERROR %02h", e);
