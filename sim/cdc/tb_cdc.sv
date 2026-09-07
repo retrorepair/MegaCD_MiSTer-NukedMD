@@ -271,6 +271,7 @@ module tb_cdc;
    // ======================================================================
    localparam int TIMEOUT = 6000000;      // CLKs (a full 2352-byte DMA needs tens of thousands)
    localparam int POLL_BUDGET = 4000000;  // CLKs; a real 2352 DMA/decode completes in far fewer
+   localparam int HANG = 32'h0000_1000;   // test-result sentinel: a never-satisfied poll (hang)
 
    // ---- sub-CPU (S68K) ----
    task automatic s68k_setaddr(input int addr);
@@ -404,6 +405,7 @@ module tb_cdc;
 
    task automatic dttrg();               // AR must be 6
       s68k_wr8('hFF8007, 8'h00);
+      repeat (400) @(posedge CLK);       // let the CDC assert DTEN and present the first host word
    endtask
 
    task automatic set_dma_addr(input int byte_addr);
@@ -561,24 +563,87 @@ module tb_cdc;
       if (idx != 2350) begin err='h05; return; end
    endtask
 
-   // -------- DMA3: EDT/DSR flag semantics for MAIN host-data (err 01..06) --
+   // word RAM 2M mode (sub RMW of FF8002), give word RAM to main (RET), MEM_WP off, gVsync dwell
+   task automatic mcd_wram_mode_2m();
+      logic [15:0] v; s68k_rd('hFF8002,1'b1,v); v = v & ~16'h0014; s68k_wr16('hFF8002, v);
+   endtask
+   task automatic mcd_wram_to_main();
+      logic [15:0] v; s68k_rd('hFF8002,1'b1,v); v = v | 16'h0001; s68k_wr16('hFF8002, v);
+      repeat (200) @(posedge CLK);
+   endtask
+   task automatic mem_wp_0();
+      ext_wr('h12002, 16'h0000, 1'b1, 1'b0);   // MEM_WP (A12002, high byte) = 0
+   endtask
+   task automatic gvsync();
+      repeat (200) @(posedge CLK);
+   endtask
+
+   // -------- DMA3: testCDC_dma3, faithful MAIN host section (0x01-0x07) + WRAM (0x22-0x23) --
+   //   STATUS 2026-09-07: build 36 correctly bails at 0x01 (A12004=0x82 -> DMA3 ERROR 01, the
+   //   hardware result). The e22d454/ccb6fdf variants pass 0x01 (0x02) and run the MAIN host
+   //   section faithfully (DSR sets once dttrg() settles). NOT YET REPRODUCING THE DEEP HANG:
+   //   (1) the SUB-dest host tests 0x10-0x21 are SKIPPED (if(1'b0)) because mcdRD8(0xff80xx) is
+   //       relayed THROUGH the sub-CPU on hardware and that relay read kicks the transfer; a
+   //       direct S68K bus access here leaves DSR clear (test 0x11 reads 0x03 not 0x43). Faithful
+   //       reproduction of those needs a sub-CPU (MCD.vhd) or a modelled relay.
+   //   (2) the WRAM test 0x22 does NOT hang here, so the latent hang is deeper (PRG 0x24 / PCM
+   //       0x26 / buffer-wrap 0x30+), needing behavioural PRG+PCM destination models. It is also
+   //       possible the hardware hang is a full-core-context effect (the build-40 NukedMD
+   //       conversion + real sub-CPU) not present in the isolated ASIC.vhd diff -- R1 unresolved.
+   //   The bench is TRUSTWORTHY for the build-36 baseline and the FLAGS/DMA2 variant codes; use it
+   //   for those. Reaching the DMA3 hang is the documented next stage (see BENCH_SPEC.md).
    task automatic test_dma3_main(output int err);
-      int i;
+      int i; bit hung; logic [15:0] t16; logic [7:0] t8;
       err = 0;
+      mcd_wram_mode_2m();
+      wram_to_sub(); gvsync();
+      mem_wp_0();
+      // 0x01-0x07: MAIN host-data EDT/DSR
       cdc_dma_setup(CDC_DST_MAIN, 2352, PT);
-      ext_rd8_hi('h12004, d8); if (d8 != 8'h02) begin err='h01; $display("    [dma3] setup flags=%02h (exp 02)",d8); return; end
+      ext_rd8_hi('h12004,t8); if (t8!=8'h02) begin err='h01; $display("    [dma3] 01 flags=%02h (exp 02)",t8); return; end
       dttrg();
-      repeat (40) @(posedge CLK);
-      ext_rd8_hi('h12004, d8); if (d8 != 8'h42) begin err='h02; $display("    [dma3] after dttrg flags=%02h (exp 42)",d8); return; end
-      for (i=0;i<2352-4;i+=2) ext_rd('h12008,1'b1,d16);
-      ext_rd8_hi('h12004, d8); if (d8 != 8'h42) begin err='h03; $display("    [dma3] 2 words left flags=%02h (exp 42)",d8); return; end
-      ext_rd('h12008,1'b1,d16);
-      ext_rd8_hi('h12004, d8); if (d8 != 8'hC2) begin err='h04; $display("    [dma3] 1 word left flags=%02h (exp C2)",d8); return; end
-      ext_rd('h12008,1'b1,d16);
-      ext_rd8_hi('h12004, d8); if (d8 != 8'h82) begin err='h05; $display("    [dma3] all read flags=%02h (exp 82)",d8); return; end
-      ext_rd('h12008,1'b1,d16);
-      ext_rd8_hi('h12004, d8); if (d8 != 8'h82) begin err='h06; return; end
-      s68k_rd8_hi('hFF8004, d8); if (d8 != 8'h82) begin err='h07; return; end
+      ext_rd8_hi('h12004,t8); if (t8!=8'h42) begin err='h02; $display("    [dma3] 02 flags=%02h (exp 42)",t8); return; end
+      for (i=0;i<2352-4;i+=2) ext_rd('h12008,1'b1,t16);
+      ext_rd8_hi('h12004,t8); if (t8!=8'h42) begin err='h03; return; end
+      ext_rd('h12008,1'b1,t16); ext_rd8_hi('h12004,t8); if (t8!=8'hC2) begin err='h04; return; end
+      ext_rd('h12008,1'b1,t16); ext_rd8_hi('h12004,t8); if (t8!=8'h82) begin err='h05; return; end
+      ext_rd('h12008,1'b1,t16); ext_rd8_hi('h12004,t8); if (t8!=8'h82) begin err='h06; return; end
+      s68k_rd8_hi('hFF8004,t8); if (t8!=8'h82) begin err='h07; return; end
+      if (1'b0) begin   // SKIP tests 0x10-0x21: SUB-dest host reads need the sub-CPU relay (no sub here)
+      // 0x10-0x16: SUB host-data EDT/DSR
+      cdc_dma_setup(CDC_DST_SUB, 2352, PT);
+      s68k_rd8_hi('hFF8004,t8); if (t8!=8'h03) begin err='h10; $display("    [dma3] 10 subflag=%02h (exp 03)",t8); return; end
+      dttrg();
+      s68k_rd8_hi('hFF8004,t8); if (t8!=8'h43) begin err='h11; $display("    [dma3] 11 subflag=%02h (exp 43)",t8); return; end
+      for (i=0;i<2352-4;i+=2) s68k_rd('hFF8008,1'b1,t16);
+      s68k_rd8_hi('hFF8004,t8); if (t8!=8'h43) begin err='h12; return; end
+      s68k_rd('hFF8008,1'b1,t16); s68k_rd8_hi('hFF8004,t8); if (t8!=8'hC3) begin err='h13; return; end
+      s68k_rd('hFF8008,1'b1,t16); s68k_rd8_hi('hFF8004,t8); if (t8!=8'h83) begin err='h14; return; end
+      s68k_rd('hFF8008,1'b1,t16); s68k_rd8_hi('hFF8004,t8); if (t8!=8'h83) begin err='h15; return; end
+      ext_rd8_hi('h12004,t8); if (t8!=8'h83) begin err='h16; return; end
+      // 0x20: dma to MAIN, sub trying to read
+      cdc_dma_setup(CDC_DST_MAIN, 2352, PT);
+      dttrg(); repeat (4) @(posedge CLK);
+      for (i=0;i<2352;i+=2) s68k_rd('hFF8008,1'b1,t16);
+      ext_rd8_hi('h12004,t8); if (t8!=8'h42) begin err='h20; return; end
+      for (i=0;i<2352;i+=2) ext_rd('h12008,1'b1,t16);
+      // 0x21: dma to SUB, main trying to read
+      cdc_dma_setup(CDC_DST_SUB, 2352, PT);
+      dttrg(); repeat (4) @(posedge CLK);
+      for (i=0;i<2352;i+=2) ext_rd('h12008,1'b1,t16);
+      s68k_rd8_hi('hFF8004,t8); if (t8!=8'h43) begin err='h21; return; end
+      for (i=0;i<2352;i+=2) s68k_rd('hFF8008,1'b1,t16);
+      end // end SKIP 0x10-0x21
+      // 0x22-0x23: WRAM dma -- the FIRST unbounded `while(COMSTA[3]!=5)`
+      wram_to_sub(); gvsync();
+      cdc_dtack();
+      cdc_dma_setup(CDC_DST_WRAM, 2352, PT);
+      set_dma_addr(0);
+      dttrg();
+      ext_rd8_hi('h12004,t8); if ((t8 & ~DSR)!=8'h07) begin err='h22; return; end
+      wait_comsta5("DMA3 0x22 WRAM", hung); if (hung) begin err=HANG; return; end
+      ext_rd8_hi('h12004,t8);                                  // "EDT rises only after reading 004"
+      ext_rd8_hi('h12004,t8); if (t8!=8'h87) begin err='h23; return; end
    endtask
 
    // -------- FLAGS: EDT latched, held through IFCTRL=0/RST, cleared only by FF8004 --
@@ -640,7 +705,10 @@ module tb_cdc;
       test_dma1(e);  cdc_end(); if(e) begin $display("  CDC DMA1     ERROR %02h",e); fails++; end else $display("  CDC DMA1     PASS");
       test_flags(e); cdc_end(); if(e) begin $display("  CDC FLAGS    ERROR %02h",e); fails++; end else $display("  CDC FLAGS    PASS");
       test_dma2(e);  cdc_end(); if(e) begin $display("  CDC DMA2     ERROR %02h",e); fails++; end else $display("  CDC DMA2     PASS");
-      test_dma3_main(e); cdc_end(); if(e) begin $display("  CDC DMA3     ERROR %02h",e); fails++; end else $display("  CDC DMA3     PASS");
+      test_dma3_main(e); cdc_end();
+         if(e==HANG) begin $display("  CDC DMA3     HANG"); fails++; end
+         else if(e) begin $display("  CDC DMA3     ERROR %02h",e); fails++; end
+         else $display("  CDC DMA3     PASS");
 
       $display("======== %0d failure(s) ========", fails);
       // Acceptance anchor: build-36 CDC (HEAD) must read INIT OK / DMA1 OK / FLAGS 05 / DMA2 05 /
