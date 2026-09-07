@@ -155,6 +155,14 @@ module tb_mcd_cdc;
 
    // main-side (EXT) byte read = hi byte of an even A120xx
    task automatic ext_rd8_hi(input int addr, output [7:0] val); logic [15:0] d; ext_rd(addr,1'b1,d); val=d[15:8]; endtask
+   // CPU-paced host-data read.  The real main 68000 runs at 7.67 MHz, so it cannot issue A12008
+   // reads anywhere near back-to-back at this 53.7 MHz CLK; draining the host FIFO faster than a
+   // real CPU outruns the CDC fetch and makes DSR read low early (DMA3 test 03).  Same 150-CLK
+   // spacing the validated isolated bench (tb_cdc.sv EXT_GAP) uses.
+   localparam int EXT_GAP=150;
+   task automatic ext_rd_host(input int addr, output [15:0] data);
+      ext_rd(addr,1'b1,data); repeat(EXT_GAP) @(posedge CLK);
+   endtask
    // CDC config via the sub-CPU relay
    task automatic cdc_dtack();  cdc_sel(CDC_DTACK_R); cdc_wr(8'h00); endtask
    task automatic set_ifctrl(input [7:0] v); cdc_sel(CDC_IFCTRL); cdc_wr(v); endtask
@@ -203,7 +211,89 @@ module tb_mcd_cdc;
    int  isr_hits=0; logic [23:0] isr_a='1;
    always @(posedge MCLK) if(DBG_S68K_AS_N==1'b0 && DBG_S68K_A>=24'h00037c && DBG_S68K_A<=24'h000392 && DBG_S68K_A!==isr_a) begin isr_a<=DBG_S68K_A; isr_hits++; end
 
-   logic [7:0] h0,h1,h2,h3,ptl,pth,fl; logic [15:0] pt; int i; int PT; bit hung;
+   // ---------------------------------------------------------------------------
+   // testCDC_dma3 (mcd-verificator).  Aborts on the first mismatch with that test's
+   // code, exactly like the real test -- so build-36 stops at 01 (its known hardware
+   // result) while an EDT-latch build runs on into the deeper sub-tests.
+   // Sub-side (FF80xx) accesses go through the real sub-CPU relay; main-side (A120xx)
+   // are direct.  PTv is the buffer pointer captured by INIT.
+   // ---------------------------------------------------------------------------
+   task automatic test_dma3(input int PTv, output int err);
+      int i; bit hung2; logic [15:0] t16; logic [7:0] t8;
+      err = 0;
+      mcd_wram_mode_2m(); wram_to_sub(); gvsync(); mem_wp_0();
+
+      // ---- 0x01-0x07: MAIN host-data EDT/DSR ----
+      cdc_dma_setup(CDC_DST_MAIN, 2352, PTv);
+      ext_rd8_hi('h12004,t8);
+      $display("    [dma3] 01 flags=%02h (exp 02)", t8);
+      if (t8!=8'h02) begin err='h01; return; end
+      dttrg();
+      ext_rd8_hi('h12004,t8);
+      $display("    [dma3] 02 flags=%02h (exp 42)", t8);
+      if (t8!=8'h42) begin err='h02; return; end
+      for (i=0;i<2352-4;i+=2) ext_rd_host('h12008,t16);
+      ext_rd8_hi('h12004,t8); if (t8!=8'h42) begin err='h03; $display("    [dma3] 03 flags=%02h (exp 42)",t8); return; end
+      ext_rd_host('h12008,t16); ext_rd8_hi('h12004,t8); if (t8!=8'hC2) begin err='h04; $display("    [dma3] 04 flags=%02h (exp C2)",t8); return; end
+      ext_rd_host('h12008,t16); ext_rd8_hi('h12004,t8); if (t8!=8'h82) begin err='h05; $display("    [dma3] 05 flags=%02h (exp 82)",t8); return; end
+      ext_rd_host('h12008,t16); ext_rd8_hi('h12004,t8); if (t8!=8'h82) begin err='h06; $display("    [dma3] 06 flags=%02h (exp 82)",t8); return; end
+      mcd_rd8('hFF8004,t8);    if (t8!=8'h82) begin err='h07; $display("    [dma3] 07 subflags=%02h (exp 82)",t8); return; end
+      $display("    [dma3] 01-07 MAIN host  OK");
+
+      // ---- 0x10-0x16: SUB host-data EDT/DSR (needs the real sub-CPU; the isolated
+      //      bench had to skip all of this) ----
+      cdc_dma_setup(CDC_DST_SUB, 2352, PTv);
+      mcd_rd8('hFF8004,t8);
+      $display("    [dma3] 10 subflags=%02h (exp 03)", t8);
+      if (t8!=8'h03) begin err='h10; return; end
+      dttrg();
+      mcd_rd8('hFF8004,t8);
+      $display("    [dma3] 11 subflags=%02h (exp 43)", t8);
+      if (t8!=8'h43) begin err='h11; return; end
+      for (i=0;i<2352-4;i+=2) begin
+         mcd_rd16('hFF8008,t16);
+         if (i%400==0) $display("      [dma3 10-16] sub host read %0d/%0d", i, 2352-4);
+      end
+      mcd_rd8('hFF8004,t8); if (t8!=8'h43) begin err='h12; $display("    [dma3] 12 subflags=%02h (exp 43)",t8); return; end
+      mcd_rd16('hFF8008,t16); mcd_rd8('hFF8004,t8); if (t8!=8'hC3) begin err='h13; $display("    [dma3] 13 subflags=%02h (exp C3)",t8); return; end
+      mcd_rd16('hFF8008,t16); mcd_rd8('hFF8004,t8); if (t8!=8'h83) begin err='h14; $display("    [dma3] 14 subflags=%02h (exp 83)",t8); return; end
+      mcd_rd16('hFF8008,t16); mcd_rd8('hFF8004,t8); if (t8!=8'h83) begin err='h15; $display("    [dma3] 15 subflags=%02h (exp 83)",t8); return; end
+      ext_rd8_hi('h12004,t8); if (t8!=8'h83) begin err='h16; $display("    [dma3] 16 flags=%02h (exp 83)",t8); return; end
+      $display("    [dma3] 10-16 SUB host  OK");
+
+      // ---- 0x20: dma to MAIN while the SUB tries to read ----
+      cdc_dma_setup(CDC_DST_MAIN, 2352, PTv);
+      dttrg(); repeat(4) @(posedge CLK);
+      for (i=0;i<2352;i+=2) mcd_rd16('hFF8008,t16);
+      ext_rd8_hi('h12004,t8); if (t8!=8'h42) begin err='h20; $display("    [dma3] 20 flags=%02h (exp 42)",t8); return; end
+      for (i=0;i<2352;i+=2) ext_rd_host('h12008,t16);
+      $display("    [dma3] 20 MAIN-dest/SUB-reader  OK");
+
+      // ---- 0x21: dma to SUB while the MAIN tries to read ----
+      cdc_dma_setup(CDC_DST_SUB, 2352, PTv);
+      dttrg(); repeat(4) @(posedge CLK);
+      for (i=0;i<2352;i+=2) ext_rd_host('h12008,t16);
+      mcd_rd8('hFF8004,t8); if (t8!=8'h43) begin err='h21; $display("    [dma3] 21 subflags=%02h (exp 43)",t8); return; end
+      for (i=0;i<2352;i+=2) mcd_rd16('hFF8008,t16);
+      $display("    [dma3] 21 SUB-dest/MAIN-reader  OK");
+
+      // ---- 0x22-0x23: WRAM dma -- the first unbounded while(COMSTA[3]!=5) ----
+      wram_to_sub(); gvsync();
+      cdc_dtack();
+      cdc_dma_setup(CDC_DST_WRAM, 2352, PTv);
+      set_dma_addr(0);
+      dttrg();
+      ext_rd8_hi('h12004,t8);
+      $display("    [dma3] 22 flags=%02h (exp 07/47)", t8);
+      if ((t8 & ~DSR)!=8'h07) begin err='h22; return; end
+      wait_comsta5("DMA3 0x22 WRAM", hung2); if (hung2) begin err=HANGV; return; end
+      ext_rd8_hi('h12004,t8);                       // EDT rises only after reading 004
+      ext_rd8_hi('h12004,t8);
+      $display("    [dma3] 23 flags=%02h (exp 87)", t8);
+      if (t8!=8'h87) begin err='h23; return; end
+   endtask
+
+   logic [7:0] h0,h1,h2,h3,ptl,pth,fl; logic [15:0] pt; int i; int PT; bit hung; int e;
    initial begin
       RST_N=1'b0; repeat(50) @(posedge CLK); RST_N=1'b1; repeat(50) @(posedge CLK);
       $display("======== MCD sub-CPU CDC bench ========");
@@ -237,27 +327,11 @@ module tb_mcd_cdc;
       cdc_end();                                   // decoder off, IFCTRL re-armed (DOUTEN|DTEIEN)
       mcd_wr16('hFF8032, 16'h0020);                // IEN(5)=1: route the CDC (DTEI) IRQ to sub IPL5
                                                    //   (gate-array int mask, FF8032 low byte, DI(6:1))
-      $display("  [dbg] after FF8032 write: IEN=%b  isr_hits=%0d", dut.ASIC.IEN, isr_hits);
-      mcd_wram_mode_2m(); wram_to_sub(); gvsync(); mem_wp_0();
-      wram_to_sub(); gvsync();
-      cdc_dtack();               probe("after_dtack");
-      cdc_dma_setup(CDC_DST_WRAM, 2352, PT);  probe("after_setup");
-      set_dma_addr(0);           probe("after_dmaaddr");
-      dttrg();                   probe("after_dttrg");
-      ext_rd8_hi('h12004,fl);
-      $display("  [dma3] 0x22 pre-poll A12004 flags=%02h (exp 07/47)  IEN=%b isr_hits=%0d IPL_N=%b CDC_INT_N=%b",
-               fl, dut.ASIC.IEN, isr_hits, dut.S68K_IPL_N, dut.CDC_INT_N);
-      probe("mid_poll_0");
-      wait_comsta5("DMA3 0x22 WRAM", hung);
-      probe("post_poll");
-      $display("  [dbg] post-poll: isr_hits=%0d IPL_N=%b CDC_INT_N=%b", isr_hits, dut.S68K_IPL_N, dut.CDC_INT_N);
-      if (hung) $display("  CDC DMA3 (WRAM)  HANG");
-      else begin
-         ext_rd8_hi('h12004,fl);
-         ext_rd8_hi('h12004,fl);
-         $display("  [dma3] 0x23 post-DMA A12004 flags=%02h (exp 87)  %s", fl, (fl==8'h87)?"OK":"MISMATCH");
-         $display("  CDC DMA3 (WRAM)  %s", (fl==8'h87)?"PASS":"FLAGS-DIFF");
-      end
+      test_dma3(PT, e);
+      if      (e==HANGV) $display("  CDC DMA3     HANG");
+      else if (e)        $display("  CDC DMA3     ERROR %02h", e);
+      else               $display("  CDC DMA3     PASS");
+      $display("  [dbg] isr_hits=%0d CDC_INT_N=%b", isr_hits, dut.CDC_INT_N);
       $display("======== done (sub_cycles=%0d) ========", sub_cycles);
       $finish;
    end
