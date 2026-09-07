@@ -21,5 +21,6 @@ rm -rf work; "$MS/vlib" work
 "$MS/vlog" -sv -quiet -work work codes_stub.sv
 # MCD top + bench
 "$MS/vcom" -2008 -quiet -work work "$R/MCD/MCD.vhd"
-"$MS/vlog" -sv -work work tb_mcd_boot.sv
+"$MS/vlog" -sv -quiet -work work tb_mcd_boot.sv
+"$MS/vlog" -sv -work work tb_mcd_cdc.sv
 echo "compile OK"
