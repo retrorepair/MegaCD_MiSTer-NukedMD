@@ -738,3 +738,37 @@ before concluding the conversions cost timing.
 results -> scratchpad/sweep_summary.txt. Pick the best-timing seed; enable VDP only if it holds
 near the -2.0 baseline, else ship build-39 config (VDP converted but not enabled) and document.
 Only the two die 68000s remain un-converted.
+
+## Build 40 (2026-09-07) — PROMOTED: full 1:1 conversion, best timing + area (commit fc5a2f6)
+The seed sweep resolved the build-39 timing question decisively. Full table (slow 85C):
+
+| config (all have CDC fix + OSD R37/R38) | @107 | @53.7 | ALM | rbf |
+|---|---|---|---|---|
+| b39 FM/Z80/Stage1 rtl, VDP die, seed2 | -2.873 | -1.187 | 37,805 (90%) | scratchpad |
+| b39 VDP die, seed3 | -2.092 | -0.140 | 37,638 (90%) | scratchpad |
+| b40 + VDP rtl, seed2 | -2.504 | -0.471 | 36,799 (88%) | scratchpad |
+| b40 VDP rtl, seed3 | -2.324 | -0.329 | 36,738 (88%) | scratchpad |
+| **b40 VDP rtl, seed4 (PROMOTED)** | **-1.971** | **-0.115** | **36,829 (88%)** | releases/..20260907 |
+| b40 VDP rtl, seed5 | -2.510 | -0.495 | 37,980 (91%) | scratchpad |
+
+Decision: **b40 seed4** is the release. It is the COMPLETE cell-netlist conversion (VDP+FM+Z80+
+tmss/ioc/arb all 1:1 rtl), and it BEAT the pre-conversion baseline on timing (-1.971 vs ~-2.0
+@107) while using ~900 fewer ALMs than the VDP-die variants (the 1:1 VDP synthesises better than
+the die netlist). QSF locked to SEED 4 + NUKED_RTL_{FM,STAGE1,Z80,VDP}=1. RBF md5 824adafc.
+
+Lesson reinforced: timing here is dominated by placement seed (-1.971..-2.873 for the same logic).
+Always multi-seed before judging a netlist change; commit the winning SEED so the rbf reproduces.
+
+**Not hardware-tested** (built overnight, user asleep; not deployed). Morning checklist:
+1. Load releases/MegaCD_TEST_NukedMD_20260907.rbf. Install releases/main_mister/MiSTer (md5
+   f7fa87d4) for the OSD "Eject Disc" + seek-latency (back up /media/fat/MiSTer first).
+2. Run mcd-verificator with a disc mounted: confirm CDC DMA2/DMA3/FLAGS now pass on hardware.
+3. Sanity: BIOS boots (US+JP+EU), a CD game runs, FM/PCM/CDDA audio clean (the FM is now the 1:1
+   rtl, not the collapse; the VDP is the 1:1 rtl - watch for any video regression).
+4. Test OSD "Remove Cartridge & Reset" (R[37]) and "Eject Disc" (R[38], needs patched Main).
+
+**Remaining conversion:** only the two 68000s. m68kcpu (68k.v) is already one self-contained
+`always @(posedge MCLK)` module (99 always blocks + gate-level assigns), NOT a ym_lib-style cell
+netlist, so it has no latch-cell overhead to convert and little synthesis benefit; on the 53.7 MHz
+(non-critical) domain. Recommend discussing whether a 1:1 68000 rewrite is wanted before spending
+the multi-hour agent on a near-identity transform. The sub-CPU 68000 is the same Nuked m68kcpu.
