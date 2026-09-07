@@ -1,0 +1,10 @@
+--- a/rtl/MCD/ASIC.vhd
++++ b/rtl/MCD/ASIC.vhd
+@@ -2287,6 +2287,7 @@
+ 			PCM_DMA_WR <= '0';
+ 			PCM_DMA_RUN <= '0';
+ 			PCM_S68K_HALT <= '0';
++			PCM_HALT_WAIT <= (others => '0');
+ 		elsif rising_edge(CLK) then
+ 			if EN = '1' then
+ 				if S68K_PCM_SEL = '1' and S68K_PCM_DTACK_N = '1' and PCM_RDY = '1' then	-- PCM RAM is in SDRAM: wait for it (pcm_mem.sv)
