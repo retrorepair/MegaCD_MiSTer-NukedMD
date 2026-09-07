@@ -53,3 +53,5 @@ sim/*/sigs_*.txt
 sim/*/plain_signals.txt
 sim/*/storage_manifest.txt
 sim/cdc/prg_bios.hex
+sim/cdc/68k_?code.txt
+sim/cdc/work/
