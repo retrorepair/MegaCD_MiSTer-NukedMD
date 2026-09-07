@@ -972,3 +972,49 @@ Still untranscribed: the sub-tests after the trailing WRAM DMA (ROM 0x132F8 onwa
 to be the bench or an X, not the RTL (poll budget too small; relay returning before the sub had
 executed; main reads faster than a real 68000; and this uninitialised register). Probe the actual
 internal state before concluding anything about the hardware.
+
+---
+
+## Build 44 on hardware — and CDC INIT turns out to be INTERMITTENT
+
+Build 44 (= build-36 CDC + the `PCM_HALT_WAIT` reset + 1:1 NukedMD, seed 4) was compiled,
+deployed and run. Quartus note: `quartus_sta.exe` crashed with an access violation
+(`sta_find_duplicates_of_deleted_net_name`) while reading the SDC, *after* the Assembler had
+already written the `.rbf`. Re-running `quartus_sta` alone completed in 20 s with 0 errors, so
+the crash was transient, not a project fault. Worst-case setup slack **-2.049 ns** on the
+107 MHz clock (build 43 was -2.085, build 40 seed4 -1.971) — i.e. unchanged within seed noise,
+as expected for a reset-only RTL delta.
+
+**The important result is a methodological one.** Running the verificator on build 44 gave:
+
+| run | CDC INIT | rest |
+|---|---|---|
+| 1 | `ERROR 03` | CDC tests after INIT skipped |
+| 2 | `OK` | FLAGS 05, DMA2 05, DMA3 01, DMA1 OK |
+
+Run 2 is **identical to build 43**, which was re-flashed and re-run through the same MGL and
+disc as a control (`CDC INIT OK`, FLAGS 05 / DMA2 05 / DMA3 01 / DMA1 OK). So build 44 is not a
+regression — **`CDC INIT` passes or fails run-to-run on the same bitstream**, exactly like the
+already-known `IRQ TEST 0A` jitter. That is unsurprising with -2 ns of setup slack: the design
+is not timing-clean, so which paths fail varies per configuration.
+
+**Consequences — read this before trusting any hardware result in this file:**
+- A single verificator run proves nothing. Repeat it (3+) before calling anything a
+  regression or a fix. Several conclusions recorded earlier in this file rest on single runs.
+- That includes the original "build 40 hangs at DMA3" observation that started the whole CDC
+  investigation. A hang is more decisive than an error code, but it was still one run, and the
+  sub-CPU bench has since shown every transcribed DMA3 sub-test passing on `ccb6fdf`.
+- Fixing the 107 MHz slack is therefore not just a tidiness issue; it is a prerequisite for
+  trustworthy hardware measurements.
+
+Disc note: `CDC INIT` needs a disc with real Mode-1 sectors. No disc gives `ERROR 03`;
+`games/MegaCD/JPTEST/blank.cue` gives `ERROR 04`. Use a real image —
+`/media/fat/_Console/MegaCD_verif_disc.mgl` (created for this) loads the
+`3 Ninjas Kick Back (USA).chd` plus the verificator cart in one go.
+
+## Main_MiSTer changes now live on a fork
+
+The two Linux-side changes are no longer only `.patch` files. See
+`tools/main_patches/README.md`: branches `megacd-eject-disc`, `megacd-seek-latency` and the
+combined `megacd-nukedmd` on https://github.com/retrorepair/Main_MiSTer, all off upstream
+`master` (`f8dc68e`), ready to raise as PRs.

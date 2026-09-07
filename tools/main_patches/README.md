@@ -1,8 +1,26 @@
 # Main_MiSTer patches (not part of the core)
 
 Patches against https://github.com/MiSTer-devel/Main_MiSTer for behaviour that lives on the
-Linux side (the CD drive model). They are **untested**: this repository has no ARM toolchain,
-so they have to be applied and built with Main's own build setup.
+Linux side (the CD drive model).
+
+**These are now maintained as branches on a fork**, which is the copy to submit upstream from;
+the `.patch` files here are kept only as a readable record of the same two changes.
+
+| branch on https://github.com/retrorepair/Main_MiSTer | contents |
+|---|---|
+| `megacd-eject-disc`   | `mcd_eject()` + OSD status bit 38 |
+| `megacd-seek-latency` | GPGX drive latency in `cdd_t::SeekToLBA` |
+| `megacd-nukedmd`      | both, i.e. the Main actually being run here |
+
+All three branch from upstream `master` (`f8dc68e`, Release 20260907) and both patches apply
+to it cleanly. The two feature branches are deliberately independent so they can go upstream
+as separate PRs.
+
+A Main built from `megacd-nukedmd` **is** what is running on the test MiSTer
+(`releases/main_mister/MiSTer`, md5 `f7fa87d4`), so the changes are not untested: the core
+boots, the OSD "Eject Disc" item works and the verificator runs against it. What has *not*
+been done is a regression pass over the game list the seek-latency change is aimed at
+(Thunder Storm FX et al) — see the per-patch notes below.
 
 ## megacdd_seek_latency.patch — Thunder Storm FX (Wolf Team) drive latency
 
