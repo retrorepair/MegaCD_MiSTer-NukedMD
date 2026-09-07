@@ -49,3 +49,6 @@ sim/*/vsim.wlf
 sim/*/*.out
 sim/*/gen/
 sim/*/work_opt/
+sim/*/sigs_*.txt
+sim/*/plain_signals.txt
+sim/*/storage_manifest.txt
