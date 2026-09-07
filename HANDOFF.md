@@ -1080,3 +1080,39 @@ earlier attempts caused - so there is little safe headroom left there.
 model with an arbitrary 3-cycle latency, not the real SDRAM controller. The *structure* of the
 measurement (entry dominates, PRG-RAM bound) is sound; the absolute 12.5 us is not. Measure on
 hardware before changing the PRG-RAM path.
+
+## Build 46 on hardware (3 runs) - CDC fixes land, but timing regresses
+
+md5 of the b46 rbf is in releases/MegaCD_TEST_NukedMD_b46_20260907.rbf.
+
+| test | b43/44 | b45 | b46 (3 runs, consistent) |
+|---|---|---|---|
+| VAR TESTS | OK | OK | **ERROR 02** (new) |
+| IRQ TEST | 0A | 0A | 09 |
+| REG 8030 | OK | OK | **ERROR 07** (new) |
+| CDC REGS | 01 | 01 | 08 (advanced) |
+| CDC INIT | OK | OK | OK (still jitters to 03) |
+| CDC FLAGS | 05 | 12 | 32 (advanced) |
+| CDC DMA2 | 05 | OK | OK |
+| CDC DMA3 | 01 | 50 / HANG | 60, **no hang** |
+| CDC DMA1 | OK | OK | OK |
+
+**The DMA3 hang is gone** and DMA2 stays fixed; REGS, FLAGS and DMA3 all advanced to sub-tests
+that were previously unreachable. So the four CDC fixes are doing their job.
+
+**But two tests that passed now fail, and it looks like timing, not logic.** Setup slack:
+
+| clock | b45 | b46 |
+|---|---|---|
+| 107 MHz `counter[0]` | -2.049 | -2.149 |
+| `counter[1]` | **+0.103** | **-0.218** |
+| `pll_hdmi` | **+0.073** | **-0.064** |
+
+b45 had one failing clock, b46 has three. `counter[1]` going negative is the suspicious one -
+VAR TESTS and REG 8030 both report a measured COUNT (23608..23732, 1274..1275) rather than a
+plain pass/fail, i.e. they are timing measurements, and they moved the moment a second clock
+domain started failing. Build 47 (SEED 7) is an attempt to recover those two marginal clocks
+without touching logic; -2.1 ns on the 107 MHz clock will not be fixed by a seed.
+
+**Do not attribute VAR 02 / REG 8030 07 to the CDC changes without re-testing on a build whose
+`counter[1]` is positive.** If a seed recovers them, they were fitting collateral.
