@@ -6,6 +6,31 @@ timing table is from build 15 (commit 32b7afa: 36,965 ALMs, 54,281 registers, 51
 combinational ALUTs plus four registers); the equivalent-LE view is the ALUT and register
 counts.
 
+## Build 40 (2026-09-07) — full 1:1 NukedMD netlist->Verilog conversion (VDP+FM+Z80+Stage1)
+
+The default build now uses the proven-exact 1:1 readable-Verilog conversions for every
+cell-instantiation die model: ym7101_rtl (VDP), ym3438_rtl (FM), z80cpu_rtl (Z80), and
+tmss/ym6046/ym6045 _rtl (TMSS/IOC/ARB). Only the two 68000s remain die-form (m68kcpu is already
+`always @(posedge MCLK)`, not a cell netlist). Macros: NUKED_RTL_FM/STAGE1/Z80/VDP=1, SEED 4.
+
+| Resource | Used | Available | |
+|---|---|---|---|
+| ALMs (logic utilization) | 36,829 | 41,910 | 88% |
+| Dedicated logic registers | 54,651 | | |
+| M10K block RAM | 520 | 553 | 94% |
+| DSP blocks | 56 | 112 | 50% |
+
+Timing (slow 85C): **-1.971 @107 MHz (TNS -650), -0.115 @53.7 MHz** — at/below the pre-conversion
+release baseline (~-2.0 @107), i.e. the conversions did not cost timing at this seed. Notable: the
+1:1 VDP (ym7101_rtl) synthesises **~900 ALMs SMALLER** than the die netlist (88% vs 90% with VDP
+die) AND improved the 107 MHz critical path once a good seed was found. Seed matters a lot here
+(same netlist ranged -1.971 to -2.510 across seeds 2-5); SEED 4 is committed. RBF md5 824adafc
+(releases/MegaCD_TEST_NukedMD_20260907.rbf).
+
+Per-block ALM deltas vs the die baseline below are not re-tabulated; the headline is VDP die 5,034
+ALMs -> VDP rtl noticeably less, FM die -> rtl slightly more registers (6,572 vs the collapse's
+~3,930) but cleaner FF inference, Z80/tmss/ioc/arb ~neutral.
+
 ## Device totals (build 14)
 
 | Resource | Used | Available | |
