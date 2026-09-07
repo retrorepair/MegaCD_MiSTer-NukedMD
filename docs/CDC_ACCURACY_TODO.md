@@ -118,3 +118,27 @@ filled by real sector reads (DECEN/CD_WR), and (b) replays the verificator's EXA
 FF8004/FF800A sequence for each test, checking EDT/DSR/DBC against the values in test_cdc_new.c.
 Only iterate the RTL against THAT. Do NOT reintroduce e22d454's edge-latch or the DMA_ADDR_SET
 DMA_BYTE reset without such a bench proving they complete DMA3 with a disc.
+
+## FAITHFUL BENCH BUILT (2026-09-07) — sim/cdc now trustworthy for the baseline + FLAGS/DMA2
+
+The faithful bench recommended above now exists (commit b8cc5b3, sim/cdc/tb_cdc.sv + BENCH_SPEC.md).
+It feeds a REAL Mode-1 sector through the CDC decode path (make_cdc_sector.py -> sector_words.hex)
+and models the COMSTA[3] mailbox flag, so it reproduces the true hardware outcomes:
+  build 36 (HEAD): INIT OK, DMA1 OK, FLAGS 05, DMA2 05, DMA3 01   (exact hardware match)
+  e22d454 EDT latch: FLAGS 02   ccb6fdf DMA_BYTE: FLAGS OK, DMA2 OK
+The bench is now TRUSTWORTHY for FLAGS and DMA2 (the old one inverted them). Validate a CDC fix by
+`git checkout <variant> -- rtl/MCD/ASIC.vhd; sim/cdc/compile.sh && sim/cdc/run.sh` and checking the
+codes match the table.
+
+STILL TO DO to make it trustworthy for the DMA3 HANG: test_dma3_main is truncated to sub-tests
+01-07. build 36 legitimately bails DMA3 at test 01 (A12004=0x82), so the baseline is complete; but
+the e22d454/ccb6fdf variants pass test 01 (0x02) and proceed into the deep DMA3 sub-tests
+(0x10..0x63 in testCDC_dma3) where the LATENT DMA-machine hang lives. Transcribe the full
+testCDC_dma3 with wait_comsta5 poll-timeouts (first unbounded wait ~test 0x22 WRAM) so the bench
+reports HANG for those variants. Only THEN iterate a real EDT/DMA3 accuracy fix against it.
+
+KEY REFRAME from the analysis: EDT is purely OBSERVATIONAL in ASIC.vhd (read only at A12004/FF8004,
+feeds no functional path). So the "fix" is not the EDT flag itself; the real defect is the latent
+DMA-machine hang that full DMA3 reaches. The EDT edge-latch only changes what DMA3 test 01 reads,
+letting execution proceed to the hang. A correct fix must make DMA3 test 01 read 0x02 AND make the
+full DMA3 complete without hanging -- provable only with the extended bench above.
