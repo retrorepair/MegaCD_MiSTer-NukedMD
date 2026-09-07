@@ -104,7 +104,13 @@ architecture rtl of CDC is
 	
 	signal EN : std_logic;
 	
-	signal AR : std_logic_vector(3 downto 0);
+	-- LC8951 address register is 5 BITS (mcd-verificator CDC REGS test 01 writes 0xFFFF to
+	-- FF8004 and requires the word read back to be 0x071F, i.e. AR = 0x1F).  Only 0..15 select
+	-- a register; AR >= 16 must not alias onto one (CDC REGS test 0C).
+	signal AR : std_logic_vector(4 downto 0);
+	-- Decode index for the WRITE-side cases: steer AR >= 16 to R14, which none of the write
+	-- decodes implement, so those accesses fall through "when others" and change nothing.
+	signal ARD : std_logic_vector(3 downto 0);
 	signal IFCTRL : std_logic_vector(7 downto 0);
 	signal IFSTAT : std_logic_vector(7 downto 0) := x"FF";
 	signal DBC : std_logic_vector(15 downto 0);
@@ -171,6 +177,8 @@ architecture rtl of CDC is
 	
 begin
 
+	ARD <= AR(3 downto 0) when AR(4) = '0' else x"E";
+
 	EN <= ENABLE and (CLKEN_N or CLKEN_P);
 	
 	process( RESET_N, CLK )
@@ -207,9 +215,9 @@ begin
 			if EN = '1' then
 				if CS_N = '0' and WR_F = '1' then
 					if RS = '0' then
-						AR <= DI(3 downto 0);
+						AR <= DI(4 downto 0);
 					else
-						case AR is
+						case ARD is
 							when x"0" =>			--R0
 							when x"1" =>			--R1 IFCTRL
 								IFCTRL <= DI;	
@@ -236,15 +244,15 @@ begin
 								CTRL1 <= (others => '0');
 							when others => null;
 						end case;
-						if AR /= x"0" then
+						if AR /= "00000" then
 							AR <= std_logic_vector( unsigned(AR) + 1 );
 						end if;
 					end if;
 				elsif CS_N = '0' and RD_F = '1' then
 					if RS = '0' then
-						DO <= x"0" & AR;
+						DO <= "000" & AR;
 					else
-						case AR is
+						case AR(3 downto 0) is
 							when x"0" =>			--R0
 								
 							when x"1" =>			--R1 IFSTAT
@@ -279,8 +287,16 @@ begin
 								DO <= STAT3;
 							when others => null;
 						end case;
+						-- The read decode covers all 16 registers, so unlike the write side it
+						-- cannot be steered to an unimplemented index: override afterwards so an
+						-- AR >= 16 data-port read does not return a real register's value
+						-- (mcd-verificator CDC REGS test 0C reads with AR = 0x12 and requires it
+						-- not to alias onto DBCL/DBCH).
+						if AR(4) = '1' then
+							DO <= x"00";
+						end if;
 					end if;
-					if AR /= x"0" then
+					if AR /= "00000" then
 						AR <= std_logic_vector( unsigned(AR) + 1 );
 					end if;
 				end if;
@@ -331,7 +347,7 @@ begin
 			end if;
 			if EN = '1' then
 				if REG_WR = '1' then
-					case AR is
+					case ARD is
 						when x"8" =>			--R8 WAL
 							WA(7 downto 0) <= DI;
 						when x"9" =>			--R9 WAH
@@ -346,7 +362,7 @@ begin
 						when others => null;
 					end case;
 				elsif REG_RD = '1' then
-					case AR is
+					case ARD is
 						when x"F" =>			--R15 STAT3
 							IFSTAT(DECI) <= '1';
 							STAT3(VALST) <= '1';
@@ -493,7 +509,7 @@ begin
 		elsif rising_edge(CLK) then
 			if EN = '1' then
 				if REG_WR = '1' then
-					case AR is
+					case ARD is
 						when x"2" =>			--R2 DBCL
 							DBC(7 downto 0) <= DI;
 						when x"3" =>			--R3 DBCH
@@ -518,7 +534,7 @@ begin
 				end if;
 				
 				
-				if (REG_WR = '1' and AR = x"F") or (REG_WR = '1' and AR = x"1" and DI(DOUTEN) = '0') then
+				if (REG_WR = '1' and ARD = x"F") or (REG_WR = '1' and ARD = x"1" and DI(DOUTEN) = '0') then
 					IFSTAT(DTBSY) <= '1';
 					IFSTAT(DTEN) <= '1';
 					IFSTAT(DTEI) <= '1';
@@ -528,7 +544,7 @@ begin
 					FIFO_DATA0(8) <= '0';
 --					FIFO_DATA1(8) <= '0';
 					TS <= TS_IDLE;
-				elsif REG_WR = '1' and AR = x"6" then
+				elsif REG_WR = '1' and ARD = x"6" then
 					if IFCTRL(DOUTEN) = '1' then
 						IFSTAT(DTBSY) <= '0';
 --						IFSTAT(DTEN) <= '0';

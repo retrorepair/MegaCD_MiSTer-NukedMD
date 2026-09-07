@@ -407,6 +407,23 @@ begin
 					-- first and left DMA_BYTE set). PCM keeps byte granularity and is unaffected.
 					DMA_BYTE <= '0';
 					DS <= DS_IDLE;
+					-- Never abandon DS_CDC_READ with the CDC host-read strobe still asserted.
+					-- An FF8004 (DD) or FF800A write pulses DMA_ADDR_SET, and if that lands while
+					-- DS = DS_CDC_READ with CDC_WAIT_N still '1', the DS_CDC_READ branch below does
+					-- not run, so DS is forced to DS_IDLE while CDC_HRD stays '1'.  The CDC then
+					-- reaches TS_SEND and waits for HRD_N = '1' (CDC.vhd TS_SEND) while DS_IDLE
+					-- waits for CDC_WAIT_N = '1' -- a mutual deadlock with no timeout on either
+					-- side.  DBC stops counting, so IFSTAT(DTEI) never asserts, INT_N never falls
+					-- and the sub-CPU's level-5 completion interrupt never fires: the transfer is
+					-- wedged for good (mcd-verificator CDC DMA3 test 0x50, which rewrites FF8004
+					-- mid-transfer, and the intermittent DMA3 hang).  Releasing the strobe here
+					-- lets the CDC finish that byte (it counts it, as real hardware does) and the
+					-- machine resumes from DS_IDLE with the new DD/DMA_ADDR.
+					-- Inert on the normal path: DS_IDLE re-asserts CDC_HRD in the same cycle when
+					-- it starts a byte, DS_CDC_READ with WAIT_N='0' assigns '0' anyway, and in a
+					-- normal DMA setup DMA_ADDR_SET only ever pulses before DTTRG, when the machine
+					-- is idle and CDC_HRD is already '0'.
+					CDC_HRD <= '0';
 				end if;
 				-- EDT is cleared ONLY by a write to FF8004 (the DD register), never by the FF800A DMA-
 				-- address write. Both used to pulse DMA_ADDR_SET and clear EDT, so setting the DMA
@@ -414,6 +431,14 @@ begin
 				-- survive an FF800A write and be cleared only by the later FF8004 write, test 05).
 				if DMA_EDT_CLR = '1' then
 					EDT <= '0';
+					-- A write to FF8004 also drops DSR.  The DD write retargets the transfer and
+					-- abandons any host byte the machine was holding, so "data set ready" must go
+					-- with it (mcd-verificator CDC FLAGS test 12: after IFCTRL=0 and FF8004=0,
+					-- A12004 bit6 must read 0 even though 112 of 128 bytes are still pending;
+					-- test 11 immediately before it requires DSR=1 while the transfer is live).
+					-- Only FF8004 does this: FF800A pulses DMA_ADDR_SET without DMA_EDT_CLR, and
+					-- FLAGS test 02 requires an FF800A write to leave the flags alone.
+					DSR <= '0';
 				end if;
 
 				-- EDT (End of Data Transfer) is a LATCH, not a live view of "CDC idle": it is set when a
@@ -1477,17 +1502,21 @@ begin
 						if DMA_PRG_RAM_SEL = '1' and SBRQ = '0' and SRES = '1' and PRG_RDY = '1' then
 							PRG_RAM_ADDR <= DMA_ADDR;
 							PRG_RAM_DO <= DMA_DAT;
-							if DMA_ADDR(18 downto 9) >= "00"&WP then
-								PRG_RAM_WRL <= '1';
-								PRG_RAM_WRH <= '1';
-								PRG_RAM_RD <= '0';
-								PRSS <= PRS_DMA_WAIT;
-							else
-								PRG_RAM_WRL <= '0';
-								PRG_RAM_WRH <= '0';
-								PRG_RAM_RD <= '0';
-								PRSS <= PRS_END;
-							end if;
+							-- The write-protect register guards PRG-RAM against CPU writes; it does NOT
+							-- gate a CDC DMA.  mcd-verificator CDC DMA3 sub-test 0x56 sets WP = 0xFF and
+							-- then DMAs 0x930 bytes into PRG-RAM at offset 0x9000, comparing the result
+							-- against the reference, so the transfer has to write through.
+							--
+							-- Gating it here also HUNG the core outright: the blocked path went to PRS_END,
+							-- which returns to PRS_IDLE without ever clearing PR_DMA_RUN (that only happens
+							-- in PRS_DMA_END).  DS_WRITE_WAIT then waits forever for PR_DMA_RUN = '0', so
+							-- the DMA stalls, DBC stops counting, DTEI never fires and the sub-CPU's level-5
+							-- completion interrupt never arrives -- leaving sub-test 0x56's UNBOUNDED
+							-- "wait for COMSTA[3] = 5" poll spinning for good.
+							PRG_RAM_WRL <= '1';
+							PRG_RAM_WRH <= '1';
+							PRG_RAM_RD <= '0';
+							PRSS <= PRS_DMA_WAIT;
 							PR_DMA_RUN <= '1';
 						elsif S68K_PRG_RAM_SEL = '1' and S68K_PRGRAM_DTACK_N = '1' and PRG_RDY = '1' then
 							PRG_RAM_ADDR <= S68K_A(18 downto 1);

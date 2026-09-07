@@ -217,6 +217,10 @@ module tb_mcd_cdc;
       as_prev <= DBG_S68K_AS_N;
    end
 
+   // level-2 ISR probe (sub BIOS 0x334: move.w #2,(FF8026); addq.w #1,(FF8028); rte)
+   int  isr2_hits=0; logic [23:0] isr2_a='1;
+   always @(posedge MCLK) if(DBG_S68K_AS_N==1'b0 && DBG_S68K_A>=24'h000334 && DBG_S68K_A<=24'h00033e && DBG_S68K_A!==isr2_a) begin isr2_a<=DBG_S68K_A; isr2_hits++; end
+
    int  isr_hits=0; logic [23:0] isr_a='1;
    always @(posedge MCLK) if(DBG_S68K_AS_N==1'b0 && DBG_S68K_A>=24'h00037c && DBG_S68K_A<=24'h000392 && DBG_S68K_A!==isr_a) begin isr_a<=DBG_S68K_A; isr_hits++; end
 
@@ -252,6 +256,8 @@ module tb_mcd_cdc;
    task automatic test_pcm_dma(input int PTv, output int err);
       bit hung3; logic [7:0] t8;
       err = 0;
+      mcd_wr16('hFF8032, 16'h0020);   // IEN(5): this test waits on the CDC DTEI IRQ, so set it
+                                      // here rather than depending on what an earlier test left
       cdc_end();
       cdc_dma_setup(CDC_DST_PCM, 2352, PTv);
       mcd_wr16('hFF800A, 16'h0000);
@@ -269,6 +275,42 @@ module tb_mcd_cdc;
       if (hung3) begin err=HANGV; return; end
       ext_rd8_hi('h12004,t8);
       $display("    [pcm] post flags=%02h", t8);
+   endtask
+
+   // ---------------------------------------------------------------------------
+   // IRQ TEST sub-test 0x0A (ROM 0x18434..0x18482).
+   //   mcdWrite16(FF8032, 4)        -> IEN(2)=1, i.e. enable the main->sub INT2
+   //   256x { move.b #1,(A12000) ; nop x6 ; if (A12026 != 2) -> ERROR 0x0A }
+   // A12000 byte write to the even address asserts UDS with VDI(8)=1, which is what
+   // ASIC.vhd's $A12000 decode requires to set INT_PEND(2)/IFL2.  The sub's level-2 ISR
+   // (BIOS 0x334) writes FF8026=2 and bumps FF8028.  So this measures whether the sub
+   // services INT2 within the ~6-nop window the test allows.
+   // ---------------------------------------------------------------------------
+   task automatic test_irq_int2(output int err);
+      logic [15:0] v; int i, t, worst; bit ok;
+      err = 0; worst = 0;
+      mcd_wr16('hFF8032, 16'h0004);            // IEN = 4 -> IEN(2)=1
+      $display("    [irq] IEN=%b (want xxx1x = IEN(2) set)", dut.ASIC.IEN);
+      for (i = 0; i < 8; i++) begin
+         mcd_rd8('hFF8000, v[7:0]);             // a relay op: sub passes 0x20c, clearing FF8026
+         ext_rd('h12026,1'b1,v);
+         if (v[7:0]==8'd2) $display("    [irq] iter %0d: COMSTA3 still 2 before the write", i);
+         ext_wr('h12000, 16'h0100, 1'b1, 1'b0); // UDS, VDI(8)=1 -> INT2 request
+         // the test only waits ~6 nops; measure how long the sub ACTUALLY takes
+         ok = 0;
+         for (t = 0; t < 4000; t++) begin
+            ext_rd('h12026,1'b1,v);
+            if (v[7:0]==8'd2) begin ok = 1; break; end
+         end
+         if (!ok) begin
+            $display("    [irq] iter %0d: NO INT2 SERVICE (A12026=%04h, isr2_hits=%0d, IPL_N=%b, INT_PEND2=%b, IFL2=%b)",
+                     i, v, isr2_hits, dut.S68K_IPL_N, dut.ASIC.INT_PEND[2], dut.ASIC.IFL2);
+            err = 'h0A; return;
+         end
+         if (t > worst) worst = t;
+      end
+      $display("    [irq] INT2 serviced on all 8 iterations; worst = %0d A12026 polls, isr2_hits=%0d", worst, isr2_hits);
+      mcd_wr16('hFF8032, 16'h0020);   // restore IEN(5): later DMA-completion waits need the CDC IRQ
    endtask
 
    // fast=1 skips the three bulk host drains (0x10-0x16, 0x20, 0x21).  Those are ~3500
@@ -389,6 +431,48 @@ module tb_mcd_cdc;
       dttrg();
       wait_comsta5("DMA3 trailing WRAM", hung2); if (hung2) begin err=HANGV; return; end
       $display("    [dma3] 24-27 + trailing WRAM  OK");
+
+      // ---- 0x50: rewrite DD (FF8004) MID-TRANSFER and expect the DMA to still finish ----
+      // ROM 0x13C44..0x13C96.  DTTRG, ~8-cycle delay, then FF8004=0 (DD=0) immediately
+      // followed by FF8004=7 (DD=WRAM), then poll COMSTA[3] for 5 up to 20000 times;
+      // falling out of that loop is ERROR 0x50.  An FF8004 write asserts DMA_ADDR_SET (and,
+      // on ccb6fdf, DMA_EDT_CLR), which resets DMA_BYTE and forces DS <= DS_IDLE -- i.e. it
+      // aborts whatever transfer is in flight.  Hardware expects the machine to recover;
+      // build 45 times out here, so it does not.
+      cdc_end();
+      cdc_dma_setup(CDC_DST_WRAM, 2352, PTv);
+      set_dma_addr(0);
+      // NB: use the bare AR=6 write, NOT dttrg() -- dttrg() adds a 400-clock settle that the
+      // real test does not have, which let the transfer run ~134 bytes before the DD rewrite
+      // instead of the handful of bytes hardware sees.  Keep the gap as short as the test's.
+      cdc_wr(8'h00);                      // DTTRG
+      probe("at_dttrg");
+      mcd_wr8('hFF8004, 8'h00);           // DD = 0  mid-transfer, as early as possible
+      probe("dd_zero");
+      mcd_wr8('hFF8004, 8'h07);           // DD = 7  again
+      probe("dd_rewrite");
+      wait_comsta5("DMA3 0x50 DD-rewrite", hung2);
+      probe("after_0x50");
+      if (hung2) begin err='h50; return; end
+      $display("    [dma3] 50 DD-rewrite mid-transfer  OK");
+
+      // ---- 0x56: PRG-RAM DMA must IGNORE the main-CPU write protect ----
+      // ROM 0x13D42..0x13DE4.  Sets A12002 = 0xFF (WP on), then DMAs 0x930 bytes into PRG-RAM
+      // at offset 0x9000 (FF800A = 0x1200) and waits on an UNBOUNDED "COMSTA[3] == 5" poll at
+      // 0x13DB0 -- no counter, so if the transfer never completes the whole suite hangs here,
+      // which is the "CDC DMA3...." with no result seen on hardware.
+      cdc_end();
+      ext_wr('h12002, 16'hFF00, 1'b1, 1'b0);   // A12002 high byte = WP = 0xFF
+      cdc_dtack();
+      cdc_dma_setup(CDC_DST_PRG, 2352, PTv);
+      mcd_wr16('hFF800A, 16'h1200);            // DMA address 0x1200<<3 = PRG offset 0x9000
+      dttrg();
+      probe("wp_dma");
+      wait_comsta5("DMA3 0x56 PRG-RAM with WP=FF", hung2);
+      probe("after_0x56");
+      ext_wr('h12002, 16'h0000, 1'b1, 1'b0);   // WP back off
+      if (hung2) begin err='h56; return; end
+      $display("    [dma3] 56 PRG-RAM DMA ignores write protect  OK");
    endtask
 
    logic [7:0] h0,h1,h2,h3,ptl,pth,fl; logic [15:0] pt; int i; int PT; bit hung; int e;
@@ -425,6 +509,9 @@ module tb_mcd_cdc;
       cdc_end();                                   // decoder off, IFCTRL re-armed (DOUTEN|DTEIEN)
       mcd_wr16('hFF8032, 16'h0020);                // IEN(5)=1: route the CDC (DTEI) IRQ to sub IPL5
                                                    //   (gate-array int mask, FF8032 low byte, DI(6:1))
+      test_irq_int2(e);
+      if (e) $display("  IRQ INT2     ERROR %02h", e); else $display("  IRQ INT2     PASS");
+
       // Isolated PCM DMA FIRST: it is the one destination that halts the sub-CPU, and it
       // runs on either build (unlike DMA3, which build-36 aborts at test 01).
       test_pcm_dma(PT, e);
