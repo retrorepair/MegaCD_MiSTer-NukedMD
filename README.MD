@@ -75,7 +75,7 @@ Place cartridge dump named cart.rom into game's folder
 
 The reference is [mcd-verificator](https://gendev.spritesmind.net/forum/viewtopic.php?t=3166),
 krikzz's hardware-validated Mega CD diagnostic, run on a real DE10-Nano.  Build 56, over
-**32 consecutive runs whose result screens were byte-identical**:
+**47 runs, 46 of them byte-identical** (the 47th passed everything, IRQ TEST included):
 
 | test | result |
 |---|---|
@@ -91,8 +91,8 @@ CDC INIT used to fail 62% of runs and is now 0 in 34; the CDC frame timer was ex
 before each sector arrived, so sync insertion fired on every normal frame and woke the sub CPU
 to read a sector header that had not been latched yet.
 
-IRQ TEST 0A is the last one, and it is marginal rather than wrong.  Individual runs do pass it -
-builds 51 and 54 each produced a run where every single test was OK.  A 120-offset sweep of the
+IRQ TEST 0A is the last one, and it is marginal rather than wrong.  About one run in 25 passes it
+outright - builds 51, 54 and 56 have each produced a run where every single test was OK.  A 120-offset sweep of the
 sub-CPU's interrupt path (sim/cdc/irq) puts the response at 5411/6190/7097 ns against a 6779 ns
 deadline, with the gate array contributing nothing measurable: the whole spread is the 68000's
 own /VPA-terminated interrupt acknowledge, which takes 13-22 clocks depending on E-clock phase.

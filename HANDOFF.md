@@ -1554,12 +1554,14 @@ in this session, so: Cobra Command (FMV playing), Final Fight CD and 3 Ninjas Ki
 and run. Thunder Storm FX comes up on the JP BIOS "press the start button" screen, which is that
 BIOS waiting for input rather than a fault.
 
-## Build 56 on hardware: 32 runs, every one byte-identical
+## Build 56 on hardware: 47 runs, 46 of them byte-identical
 
-Every run: everything OK except `IRQ TEST 0A`.  Not "mostly the same" - the 32 result screens
-have the same md5, which this core has never managed before; it used to jitter between two and
-four different pages in any given session.  `CDC INIT` is 0 failures in 54 runs across builds 54
-and 56, against a 62% baseline.
+46 runs: everything OK except `IRQ TEST 0A`, all with the same md5 - the first 32 consecutively.
+This core has never managed that before; it used to jitter between two and four different result
+pages in any given session.  The 47th run was a **full pass**, IRQ TEST included.
+
+`CDC INIT` is 0 failures in 69 runs across builds 54 and 56, against a 62% baseline.
+`IRQ TEST 0A` passes about 1 run in 25 (1/22 on build 54, 1/47 here).
 
 That determinism is worth as much as the individual fixes: a core whose diagnostic output is
 reproducible is one where the next regression will be obvious.
