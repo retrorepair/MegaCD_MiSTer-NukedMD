@@ -260,7 +260,12 @@ begin
 							when x"2" =>			--R2 DBCL
 								DO <= DBC(7 downto 0);
 							when x"3" =>			--R3 DBCH
-								DO <= DBC(15 downto 8);
+								-- DBC is 12 bits on the LC8951, so DBCH reads back only its top
+								-- nibble; bits 7:4 are not stored and read 0.  mcd-verificator CDC
+								-- REGS sub-test 0B writes DBCH = 0xFA and requires 0x0A back.  (The
+								-- transfer machine parks 0000/1111 in DBC(15:12) as its own flag,
+								-- which must not be visible here either.)
+								DO <= x"0" & DBC(11 downto 8);
 							when x"4" =>			--R4 HEAD0
 								DO <= HEAD0;
 							when x"5" =>			--R5 HEAD1

@@ -1183,7 +1183,13 @@ begin
 								end if;
 							when "0000010" =>			--$FF8004 CDC Mode/CDC register address (extern)
 								S68K_REG_DO <= EDT & DSR & "000" & DD & x"00";
-							when "0000011" => null;	--$FF8006 CDC register data (extern)
+							when "0000011" =>			--$FF8006 CDC register data (extern)
+								-- The CDC drives only the LOW byte (MCD.vhd muxes S68K_DI(7:0) from
+								-- CDC_DO when CDC_N is low); the high byte always comes from here.  It
+								-- must read 0, or a WORD read of FF8006 returns a stale high byte from
+								-- the previous register access.  mcd-verificator CDC REGS sub-test 0B
+								-- does R16 FF8006 and requires exactly 0x0095 / 0x000A.
+								S68K_REG_DO <= (others => '0');
 							when "0000100" =>			--$FF8008 CDC host data
 								S68K_REG_DO <= HD;
 								SUB_CPU_CDC_READ <= '1';
