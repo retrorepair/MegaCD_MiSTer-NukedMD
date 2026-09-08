@@ -61,3 +61,7 @@ sim/cdc/irq/transcript
 sim/cdc/irq/log_*.txt
 sim/cdc/irq/68k_*code.txt
 sim/cdc/irq/prg_bios.hex
+cr_ie_info.json
+sim/main68k/work
+sim/main68k/transcript
+sim/main68k/68k_*code.txt
