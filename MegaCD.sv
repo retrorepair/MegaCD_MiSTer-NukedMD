@@ -1746,16 +1746,23 @@ end
 
 ///////////////////////////////////////////////
 // Cartridge in the slot: set by a cartridge download (OSD "Insert Cartridge" or cart.rom
-// next to the CD), cleared by a BIOS (re)load or "Reset & Eject". While set, /CART is low:
-// the cartridge boots at 000000 and the Mega CD sits at 400000.
+// next to the CD), cleared only by the OSD "Remove Cartridge & Reset". While set, /CART is
+// low: the cartridge boots at 000000 and the Mega CD sits at 400000.
+//
+// A cartridge is physical: on hardware it survives a reset and a disc swap, and the only way
+// to remove it is to pull it out.  So neither a reset nor a BIOS reload may clear this.  That
+// matters here because Main re-sends the BIOS on EVERY image mount (see the "Disc Insert" note
+// further up), so clearing on bios_download made an inserted cartridge vanish the next time the
+// disc was changed - one of the ways the cartridge options behaved erratically.  The register
+// powers up at 0 and loading a core reconfigures the FPGA, so a fresh session always starts
+// with an empty slot without needing a BIOS download to clear it.
 
 reg rom_cart_mode = 0;
 always @(posedge clk_sys) begin
-	reg old_cart_dl, old_bios_dl;
+	reg old_cart_dl;
 	old_cart_dl <= cart_download;
-	old_bios_dl <= bios_download;
 	if(~old_cart_dl & cart_download) rom_cart_mode <= 1;
-	if((~old_bios_dl & bios_download) | host_reset | cart_remove) rom_cart_mode <= 0;
+	if(cart_remove) rom_cart_mode <= 0;
 end
 
 ///////////////////////////////////////////////
