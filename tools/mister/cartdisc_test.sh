@@ -24,7 +24,7 @@ PLINK="/c/Program Files/PuTTY/plink.exe"
 PSCP="/c/Program Files/PuTTY/pscp.exe"
 OUT=${1:-cartdisc}; mkdir -p "$OUT"
 sh() { "$PLINK" -ssh -batch -hostkey "$HK" -pw 1 root@$MISTER "$1"; }
-shot() { sh "echo 'screenshot $1.png' > /dev/MiSTer_cmd; sleep 4" >/dev/null; }
+shot() { sh "sleep ${2:-4}; echo 'screenshot $1.png' > /dev/MiSTer_cmd; sleep 4" >/dev/null; }
 load() { sh "echo load_core $1 > /dev/MiSTer_cmd; sleep 10; /media/fat/settle.sh 8 150; sleep 8" >/dev/null; }
 keys() { sh "python3 /media/fat/uinput_kbd.py --send $1; sleep 6" >/dev/null; }
 mark() { sh "wc -l < /tmp/mister.log"; }
@@ -34,7 +34,7 @@ sh "rm -f /media/fat/screenshots/*.png" >/dev/null
 echo "== 1. insert cartridge (MGL, index 6) =="
 load /media/fat/_Console/MegaCD_cart_test.mgl;      shot cart
 echo "== 2. Remove Cartridge & Reset (3 UP) =="
-N=$(mark); keys "osd wait:2 up wait:0.5 up wait:0.5 up wait:0.5 enter"; shot nocart
+N=$(mark); keys "osd wait:2 up wait:0.5 up wait:0.5 up wait:0.5 enter"; shot nocart 20   # a reset needs ~20 s to reach the BIOS
 sh "tail -n +$N /tmp/mister.log | sed 's/\x1b\[[0-9;]*m//g' | grep -iE 'eject|reset|mount' | head -5" || true
 echo "== 3. insert disc =="
 load /media/fat/_Console/MegaCD_cobra_us.mgl;       shot disc
