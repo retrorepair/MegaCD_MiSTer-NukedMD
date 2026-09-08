@@ -1792,7 +1792,9 @@ zero-latency PRG-RAM still misses. Nothing on our side is in the way.
 
 ## Media handling
 
-All four OSD operations verified on hardware by what Main logs. Two real bugs fixed: a cartridge
+Three of the four OSD operations verified on hardware by what Main logs.  **"Remove Cartridge &
+Reset" does not work** and is the top open item - see the correction and the TMSS split further
+down; I reported it working earlier in this session and was wrong. Two real bugs fixed: a cartridge
 vanished on every disc change (Main re-sends the BIOS on every mount), and inserting a different
 game hot-swapped it into the previous game's BIOS and save file, because `same_game` was a
 directory-prefix match and most libraries are one flat folder. An adversarial review then caught
