@@ -170,7 +170,8 @@ architecture rtl of CDC is
 	signal FRAME_END : unsigned(19 downto 0);	-- clocks per 75 Hz frame - 1, by region
 	signal FRAME_MID : unsigned(19 downto 0);	-- 40% of the frame
 	signal SECTOR_END : std_logic;				-- a full sector arrived from the drive
-	
+	signal SECTOR_ACTIVE : std_logic;			-- between a sector's first and last word
+
 --	signal DECI_WAIT_CNT : unsigned(15 downto 0);
 --	signal DECI_SET : std_logic;
 	signal OLD_WRRQ : std_logic;
@@ -340,6 +341,7 @@ begin
 			
 			CD_WR_OLD <= '0';
 			WORD_CNT <= (others => '0');
+			SECTOR_ACTIVE <= '0';
 			RAM_POS <= (others => '0');
 			DEC_POS <= (others => '0');
 			DEC_DAT <= (others => '0');
@@ -366,13 +368,15 @@ begin
 			-- pair.  mcd-verificator's CDC INIT sub-test 03 has exactly one chance to catch LBA 0's
 			-- header, which is why it failed intermittently.
 			--
-			-- WORD_CNT is non-zero only between the first word of a sector and its last, so gating on
-			-- it says "a sector is being decoded, do not insert a sync".  With no disc nothing streams,
-			-- WORD_CNT stays 0, and the free-running 75 Hz interrupt continues as before.
+			-- SECTOR_ACTIVE is set between a sector's first and last word, so gating on it says
+			-- "a sector is being decoded, do not insert a sync".  With no disc nothing streams, it
+			-- stays low, and the free-running 75 Hz interrupt continues as before.  (It is a flag
+			-- rather than "WORD_CNT /= 0" so this path is one flip-flop, not an 11-bit compare
+			-- feeding DECI -> CDC_INT_N -> the ASIC's INT_PEND(5) on the 53.7 MHz clock.)
 			if CTRL0(DECEN) = '0' then
 				IFSTAT(DECI) <= '1';
 				STAT3(VALST) <= '1';
-			elsif DEC_FRAME = '1' and CTRL1(SYIEN) = '1' and WORD_CNT = 0 then
+			elsif DEC_FRAME = '1' and CTRL1(SYIEN) = '1' and SECTOR_ACTIVE = '0' then
 				IFSTAT(DECI) <= '0';
 				STAT3(VALST) <= '0';
 			elsif DEC_MID = '1' then
@@ -411,7 +415,13 @@ begin
 					if CD_WR = '1' and CD_WR_OLD = '0' then
 						DEC_DAT <= CD_DI;
 						DEC_POS <= RAM_POS;
-					
+
+						-- a word of a sector is being taken: hold off sync insertion until the last one
+						SECTOR_ACTIVE <= '1';
+						if WORD_CNT = 2352/2-1 then
+							SECTOR_ACTIVE <= '0';
+						end if;
+
 						WORD_CNT <= WORD_CNT + 1;
 						if WORD_CNT = 0 then
 --							DEC_WR_EN <= CTRL0(WRRQ);
@@ -464,6 +474,7 @@ begin
 					end if;
 				else
 					WORD_CNT <= (others => '0');
+					SECTOR_ACTIVE <= '0';   -- decoder off: nothing is streaming
 					RAM_POS <= (others => '0');
 				end if;
 			end if;
