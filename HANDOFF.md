@@ -2007,3 +2007,22 @@ one virtual keyboard, and a reset counted in the log after every keypress:
 Reproducible. Both faults stand exactly as described above: with TMSS on, the cartridge is
 mapped back after the reset; with TMSS off, the cartridge is gone but the Mega CD BIOS does
 not start. The user's `MegaCD.CFG` is restored to TMSS enabled.
+
+### Fault 2 is state, not a transient: further short resets do not recover it
+
+Single daemon, TMSS off, cartridge loaded, then a sequence with a reset counted in the log
+after each step:
+
+| step | reset seen | screen |
+|---|---|---|
+| `R[37]` Remove Cartridge & Reset | yes | black (1416 B, md5 05351dcc) |
+| F2 - region hotkey, a second short reset, no BIOS reload | yes | black (1191 B, md5 194493b8) |
+| `R[37]` again - the same pulse a second time | yes | black (identical md5) |
+| `R[0]` Reset & Eject CD - reset **plus** Main re-sending the BIOS | yes | **Mega CD BIOS** (15103 B) |
+
+So it is not "the transition caught something mid-way": the machine sits in a state that any
+number of ~13 ms resets leave alone and that only the BIOS download path clears. Whatever that
+path re-establishes - the ~100 ms `loading` hold, the download's own side effects (`region_req`
+re-sniffed, `ioctl_wr` traffic, the SDRAM write burst), or something Main does around it - is
+the thing `cart_remove` is missing. That is exactly the question the static reset audit and the
+sim bench are answering.
