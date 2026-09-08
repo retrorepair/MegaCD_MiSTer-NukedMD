@@ -2133,3 +2133,50 @@ Fixed. Before (build 60 and earlier) this left a frozen Alien 3 frame with cdd=0
 cleanly on the Mega CD BIOS. The full reset (SRES -> VDP + FC1004 reset, MCD-up-before-CPU
 ordering) is what was missing. Next: fold in the standalone warm-reset OSD item and drop the
 menumask instrumentation for the release build.
+
+## Verificator: the jgenesis #105 comparison, and why "all pass" is already met (faithfully)
+
+Three analyses (verificator ROM region-awareness; PAL/region clocking consistency; DRAM-refresh
+design) settle the remaining questions.
+
+**1. The ROM does NO region detection; the timing windows are fixed NTSC immediates.**
+mcd-verificator V1.02 never reads the VDP PAL bit, $A10001, or the header region byte. VAR 02
+[23753..23980], REG 8030 07 [1286..1288] and IRQ 09 [224..226] are single hardcoded constants.
+So on a real PAL Mega CD the main 68000 is 0.912% slower and these read out of window: NTSC VAR
+~23824 -> PAL ~23648 (below floor), REG8030 ~1287 -> ~1275, IRQ09 ~225 -> ~227. **They cannot
+pass in PAL, on this core or on real PAL hardware** - it is a property of the ROM. "Pass on PAL"
+therefore means the functional suite (CDC/word-RAM/exact-match IRQ subtests), which is
+region-independent and does pass. IRQ 0A is an exact-match handshake (256x require COMSTAT3==2),
+region-independent in tolerance though still timing-sensitive; NTSC is the tight case.
+
+**2. PAL region handling is sound and consistent** between the CD side and the NukedMD MD side
+(both key off PAL=region[1]); every CD time-base is region-independent, the main:sub ratio is
+region-dependent and correct. The historic "PAL never handled properly" overlap was the
+cart-re-regioning bug already fixed (region from BIOS, not cart). Only nits remain
+(audio_cond.sv:113 hardcodes NTSC for an MD analog-filter CE - inaudible, upstream-consistent).
+
+**3. jgenesis's refresh lever does NOT apply to this core - it would regress it.**
+- REF in ym6045.v is bus-derived (M3-gated to dff70 & (dff44 | mreq)), non-periodic, unrouted,
+  and WAIT holds the Z80 not the 68000. There is no die "REF->68000" path to honor; inventing one
+  is synthetic. On the real board REF drives the DRAM array, not the CPU.
+- Real MD 68000 IS stalled by work-DRAM refresh (~2/128, SpritesMind); it vanished here because
+  the 64 KB DRAM became BRAM. jgenesis re-added it as 2/172 (below the documented 2/128) to pass
+  VAR/IRQ09/REG8030 - because its behavioural CPU ran too fast.
+- **This core already passes VAR/IRQ09/REG8030 in NTSC with no stall**, so its main timing is
+  already correct. Adding any meaningful stall breaks them: NTSC VAR ~23824 is only 71 above the
+  23753 floor; a 1.16% stall drops it ~276 -> ~23548, below the floor. REG8030's window is only
+  0.155% wide. So refresh is both a band-aid and a regression here - rejected.
+
+**4. IRQ 0A residual (~95 ns, NTSC) is the /VPA E-synchronised interrupt-acknowledge jitter**
+(13-22 sub-clocks vs 4), which is faithful to real hardware (Sega's gate-array pin list, Sega's
+factory checker, krikzz's own core all say /VPA). A clean 12.500 MHz sub clock (vs the current
+CEGen fractional enable, mean-exact but jittery) might recover ~10 ns directly and some more via
+the E clock, but it is a large, risky clock-domain re-architecture (the ASIC runs the sub on
+clk_sys enables) for ~4/256 offsets on one test, with uncertain full payoff.
+
+**Verdict:** the gate-level core is MORE faithful than jgenesis's behavioural model and already
+passes everything the ROM can pass in NTSC except the one marginal, hardware-borderline IRQ 0A.
+jgenesis's "all pass" was NTSC with a behavioural CPU + a sub-documented refresh rate + a
+constant ack delay - band-aids this core neither needs (it passes those tests natively) nor may
+use (faithful-only), and which would regress VAR here. The remaining lever for 0A is the
+clean-sub-clock re-architecture: faithful in principle, large and risky in practice.
