@@ -1154,3 +1154,45 @@ counter[1] from +0.103 to -0.218. A late DTACK on the A12020/A12026 read path in
 **So these two are not fixable by CDC logic changes.** They need either timing closure on
 counter[1] or a genuinely faster main-CPU gate-array read acknowledge. SEED 7 was tried and is
 far worse (107 MHz -2.829, counter[1] -1.094), so seed roulette is not the answer either.
+
+## IRQ sub-test 09 is ALSO a narrow timing measurement - the three regressions are one cause
+
+IRQ TEST is ROM 0x18244..0x18686 (entry `pea $19612` = "IRQ TEST...."). Sub-test 09
+(ROM 0x18376..0x18410):
+```
+  relay: FF8028 = 0, FF802A = 0        ; clear the L2 and L3 (timer) counters
+  relay: FF8030 = 1                    ; TIMER W, TD=1  -> period (TD+1)*30.72us = 61.44us
+  relay: FF8032 = 0x0C                 ; unmask IEN2 | IEN3
+  1024x { A12000.b = 1 (IFL2) ; 13 nops }   ; 102 cycles/iter -> ~13.6-13.9 ms
+  relay: FF8032 = 0, FF8030 = 0        ; stop
+  0183f6  cmpi.w #$0400,A12028   -> must be exactly 1024   (sub-test 08, PASSES)
+  018402  cmpi.w #$00DF,A1202A / bls -> fail 09
+  01840c  cmpi.w #$00E2,A1202A / bls -> pass
+```
+`A1202A` is the sub-CPU level-3 (timer) interrupt count, incremented by the L3 handler at sub
+0x340 (`move.w #3,FF8026 ; addq.w #1,FF802A ; rte`). Accepted **224..226 - three values**, a
+~0.9% band. Note 09 runs BEFORE 0A, so `0A -> 09` is a REGRESSION: the DUT now fails earlier.
+
+Codes 05 and 07 are never produced by this function.
+
+### The three build-46 regressions have one cause
+
+| test | tolerance | build 46 |
+|---|---|---|
+| VAR TESTS 02 | 23753..23980 (0.96%) | 0.09-0.6% low |
+| REG 8030 07 | 1286..1288 (0.16%) | ~0.9% low |
+| IRQ 09 | 224..226 (~0.9%) | fails (was passing, failed later at 0A) |
+
+Three independent stopwatch tests, each with ~1% tolerance, all breaking together the moment
+the fitter took counter[1] from +0.103 to -0.218. None of them compares a register value; the
+value-checking sub-tests that precede each of them still pass. This is one timing regression,
+not three logic faults.
+
+**Consequence for planning.** Timing margin is now the gate on the remaining verificator errors,
+not CDC accuracy. REG 8030 07 tolerates 0.16% - it will flip on almost any fitter reshuffle
+regardless of what the CDC does. Adding more logic to a design already at -2.1 ns on the 107 MHz
+clock makes this worse every time. The CDC fixes themselves are sound and are landing (hang
+gone, DMA2 fixed, REGS/FLAGS/DMA3 all advancing), so the right split is:
+  1. keep the CDC fixes,
+  2. treat timing closure as its own piece of work (it also gates IRQ 0A, whose INT2 service
+     latency measured 5.94 us on hardware against a ~7-8 us window - i.e. also margin-limited).
