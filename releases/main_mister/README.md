@@ -19,13 +19,15 @@
    from the outside looks like nothing happened. The test is now gated on the core's
    `status[36]`, so the default restarts on every disc change and "Keep Running" is opt-in for
    multi-disc swapping. Cores that do not define bit 36 read 0 and get the restart behaviour.
-4. **The eject is logged**, so it can be told apart from a keypress that never arrived.
+4. **The eject and the disc-change decision are logged**, so they can be told apart from a
+   keypress that never arrived, and so it is visible whether a disc change is about to swap the
+   disc or restart the machine.
 5. **`setvbuf(stdout, NULL, _IOLBF, 0)`** — stdout is block-buffered when redirected, so
    `MiSTer > /tmp/mister.log` kept the last few kilobytes in libc's buffer and an action's log
    line stayed invisible until unrelated output pushed it out. Line-buffered now. This one is
    not MegaCD-specific and costs nothing.
 
-- md5 **561f3ede** (1,162,116 bytes).
+- md5 **7f4bed06** (1,162,116 bytes).
 - Built with ARM's GNU 10.2 `arm-none-linux-gnueabihf` toolchain — the one Main's own
   `setup_default_toolchain.sh` fetches. `wslbuild.sh` in the fork cross-builds it from WSL.
 
