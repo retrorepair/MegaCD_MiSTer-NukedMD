@@ -1505,3 +1505,17 @@ Timing regressed in that build though - **-2.339 @107 MHz (TNS -1784)** against 
 the NukedMD models and nothing here touches it, so that part is fit noise; the 53.7 MHz figure
 is not, and is the 11-bit `WORD_CNT /= 0` compare this build put into DECI -> CDC_INT_N ->
 INT_PEND(5). Replaced with a one-bit `SECTOR_ACTIVE` flag (58d12d5) and rebuilding.
+
+### Cartridge persistence and the no-disc case, both confirmed on build 54
+
+Loaded the verificator MGL (disc + the verificator as a cartridge), then selected
+"Reset & Eject CD" from the OSD. Afterwards:
+
+- **The verificator cartridge is still running.** Under the old logic `mcd_set_image(0, "")`
+  re-sent the BIOS, `bios_download` cleared `rom_cart_mode`, and the machine would have come
+  back on the Mega CD BIOS with an empty slot. A cartridge is physical; it stays.
+- **`CDC INIT` reports ERROR 03**, which is the correct answer with an empty drive - the header
+  of LBA 0 never appears because there is no disc. So the sync-insertion guard did not break the
+  no-disc path it has to leave alone.
+- The run came back PAL (VAR 23732 / IRQ 227 / REG 8030 1275), because `mcd_set_image(0, "")`
+  reloads the fallback `cifs/MegaCD/boot.rom`, which is the 'E' BIOS. Also correct.
