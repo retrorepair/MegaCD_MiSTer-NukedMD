@@ -2180,3 +2180,39 @@ jgenesis's "all pass" was NTSC with a behavioural CPU + a sub-documented refresh
 constant ack delay - band-aids this core neither needs (it passes those tests natively) nor may
 use (faithful-only), and which would regress VAR here. The remaining lever for 0A is the
 clean-sub-clock re-architecture: faithful in principle, large and risky in practice.
+
+## IRQ 0A: root cause is GLUE LOGIC (the shoehorned sub-CPU exposed it) - fix for a later release
+
+A 256-offset decomposition (sim/cdc/irq, scratch clean/frac/noreg copies) settles it. The deadline
+is 7170.4 ns (55 main clocks, re-verified). Sweep of the sub INT2->FF8026 response:
+
+| config | sub clock | worst ns | misses/256 |
+|---|---|---|---|
+| real core (baseline) | 12.5 jittery (CEGen /4) | 7264.9 | 4 |
+| **strobes combinational, buses still registered** | 12.5 jittery | 7171.8 | **1** |
+| clean 12.5 MHz alone | 12.5 exact | 7340.0 | 6 (worse!) |
+| strobes combinational + clean 12.5 MHz | 12.5 exact | 7160.0 | **0** |
+
+Findings:
+- **The one avoidable, UNFAITHFUL latency is the MC68K wrapper's MCLK output register on the
+  sub-CPU CONTROL STROBES** (`rtl/MCD/MC68K.vhd` output stage). It delays /AS,/DS by 9.3 ns,
+  pushing /DS into S4 = an extra write wait state on every sub-CPU write; the exception has 3
+  stack writes + the ISR write. Cost ~93 ns. The real board has no such register. This is exactly
+  the "shoehorned Nuked 68000 uncovering glue-logic issues" the owner predicted.
+- The sub-clock mean is EXACTLY 12.5 MHz (CEGen Bresenham verified over a full period: 50.000000
+  MHz enable, 12.500000 MHz edges). The earlier "12.483 MHz" was a finite-window artifact. No
+  deficit to fix. A clean (zero-jitter) 12.5 MHz clock ALONE is *worse* (7340 ns) - the jitter is
+  net-neutral noise, not a systematic inflation.
+- Every other stage is faithful: IPL delivery 0 ns (combinational), the /VPA autovector IACK is a
+  genuine 6800 E-sync of 15-16 sub-clocks (must not change), DTACK/PRG timing has no excess.
+- Corrects an earlier wrong note: removing the register does NOT make 0A worse - that was a
+  120-offset undersampling artifact (compared true-worst 7172 against a 120-sample max of 7097).
+  The real 256-sample baseline is 7264.9, so removal is clearly better.
+
+**The faithful fix (later release):** in `rtl/MCD/MC68K.vhd`, drive the sub-CPU control strobes
+(/AS,/UDS,/LDS,/RNW,/FC) to the gate array COMBINATIONALLY while keeping the wide address/data
+buses registered at MCLK (they are the 107->53.7 MHz timing-closure hazard; the 5 strobe bits are
+not). Recovers ~93 ns, 4->1 miss/256 (per-run pass ~1.8% -> ~37%). Full 0/256 additionally needs
+a clean 12.5 MHz sub clock (a dedicated 50/100 MHz PLL output -> clean /4 into ASIC.CLK_CNT,
+crossing into the clk_sys gate-array domain) - larger and riskier; 0A is genuinely
+hardware-marginal (the faithful real board itself only clears the deadline by ~10 ns).
