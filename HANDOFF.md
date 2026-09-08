@@ -1553,3 +1553,15 @@ The sync-insertion guard changes when DECI fires, which is the most game-critica
 in this session, so: Cobra Command (FMV playing), Final Fight CD and 3 Ninjas Kick Back all boot
 and run. Thunder Storm FX comes up on the JP BIOS "press the start button" screen, which is that
 BIOS waiting for input rather than a fault.
+
+## Build 56 on hardware: 12 runs, all identical
+
+Every run: everything OK except `IRQ TEST 0A`. `CDC INIT` passes 12/12, so the sync-insertion
+fix holds across builds (0 failures in 34 runs now, against a 62% baseline).
+
+Note on the Thunder Storm FX check: its disc mounts ("CD mounted, last track = 2") and the JP
+BIOS runs and animates, but it sits on "press the start button". That is the BIOS waiting for
+input, not a fault - the virtual keyboard is not mapped to a joypad on this machine, so Start
+cannot be synthesised. If a future session wants to drive games, the uinput device would have
+to present itself as a joystick that MiSTer already knows, or a keyboard map would have to be
+written into config/inputs.
