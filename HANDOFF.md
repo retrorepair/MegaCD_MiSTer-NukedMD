@@ -1425,3 +1425,24 @@ BIOS at the fallback path or set Region explicitly in the OSD.
 | `CDC INIT 03` | 8/14 (57%) |
 
 Everything else OK in all 14. That is the number the CDC sync-insertion fix has to beat.
+
+### The other five interrupt levels still clear on the level (known, not changed)
+
+`ASIC.vhd` acknowledges INT2 on the edge as of 8c933ee, but levels 1, 3, 4, 5 and 6 still clear
+`INT_PEND(n)` for as long as `INT_ACK(n)` is asserted:
+
+| level | source set at | clear at |
+|---|---|---|
+| 1 subcode | `ASIC.vhd:2341` | `ASIC.vhd:2118` |
+| 3 Timer W | `ASIC.vhd:1362` | `ASIC.vhd:1340` (also on IEN=0) |
+| 4 CDD | `ASIC.vhd:925` | `ASIC.vhd:908` |
+| 5 CDC | `ASIC.vhd:1376` | `ASIC.vhd:1374` (also on the CDC_INT_N rising edge) |
+| 6 subcode ready | `ASIC.vhd:1324` | `ASIC.vhd:1303` (also on IEN=0) |
+
+Each carries the same defect: `INT_ACK(n)` is decoded combinationally from the acknowledge bus
+cycle and stays high for ~11 CLK edges, so a request raised inside that window is set for one
+edge and cleared on the next, and the sub CPU never sees it. Unlike INT2 these are raised by
+internal events at 75 Hz to a few kHz rather than by the main CPU at will, so a collision is
+rare; and unlike INT2 nothing in the verificator exercises them, so a change here would be
+untested. Left alone deliberately. If they are fixed, note that levels 3 and 6 clear on **both**
+the acknowledge and `IEN(n) = 0`: only the acknowledge half should become an edge.
