@@ -1489,3 +1489,19 @@ removing it makes 0A worse and the 107 -> 53.7 MHz hazard it exists to fix is re
 Next places to look, if anyone returns to this: the derivation of the 52-main-clock deadline
 itself (its bus-ordering assumption is worth +-4 clocks, i.e. +-520 ns, which is the whole
 argument), and the main-side A12000 write to `INT_PEND(2)` path, which is outside this bench.
+
+## Build 54 on hardware (10 runs): CDC INIT 03 is fixed
+
+| test | build 52 (24 runs) | build 54 (10 runs) |
+|---|---|---|
+| `CDC INIT 03` | 15/24 (62%) | **0/10** |
+| `IRQ TEST 0A` | 24/24 | 9/10 - run 4 was a **full pass**, IRQ TEST included |
+
+The sync-insertion guard did what the diagnosis said it would. Build 54 also carries the
+cartridge-persistence fix, the Disc Insert restructure and the edge-acknowledged INT2.
+
+Timing regressed in that build though - **-2.339 @107 MHz (TNS -1784)** against build 52's
+-1.694 (TNS -664), and 53.7 MHz went to **-0.081** having been +0.121. The 107 MHz domain holds
+the NukedMD models and nothing here touches it, so that part is fit noise; the 53.7 MHz figure
+is not, and is the 11-bit `WORD_CNT /= 0` compare this build put into DECI -> CDC_INT_N ->
+INT_PEND(5). Replaced with a one-bit `SECTOR_ACTIVE` flag (58d12d5) and rebuilding.
