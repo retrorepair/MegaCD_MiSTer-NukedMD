@@ -78,6 +78,17 @@ class VKbd:
 
 
 FIFO = "/tmp/mister_kbd"
+PIDFILE = "/tmp/mister_kbd.pid"
+
+
+def daemon_pid():
+    """PID of a live daemon, or None."""
+    try:
+        pid = int(open(PIDFILE).read().strip())
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError):
+        return None
 
 
 def resolve(tok):
@@ -96,9 +107,20 @@ def daemon():
     inputs/*_v3.map, gamecontrollerdb), so early keystrokes are typed into a device nothing
     is reading yet.  Keeping one device open for the whole session removes that race.
     """
+    # Exactly one daemon.  A --send line is read by whichever daemon happens to be blocked in
+    # open() on the FIFO, and MiSTer opens at most NUMDEV input devices - so with several daemons
+    # a keystroke can land on a device MiSTer never opened and silently vanish.  That happened:
+    # eight daemons and nine virtual keyboards accumulated over a night of restarts and made a
+    # run of hardware results unreliable.
+    pid = daemon_pid()
+    if pid:
+        print("a keyboard daemon is already running (pid %d); kill it first" % pid, file=sys.stderr)
+        return 1
     if not os.path.exists(FIFO):
         os.mkfifo(FIFO, 0o666)
     kbd = VKbd()
+    with open(PIDFILE, "w") as f:
+        f.write(str(os.getpid()))
     print("ready", flush=True)
     try:
         while True:
@@ -116,6 +138,11 @@ def daemon():
                         time.sleep(GAP_AFTER_OSD if name in ("osd", "menu", "f12") else GAP_DEFAULT)
     finally:
         kbd.close()
+        try:
+            os.unlink(PIDFILE)
+        except OSError:
+            pass
+    return 0
 
 
 def main(argv):
@@ -126,9 +153,11 @@ def main(argv):
         print(__doc__)
         return 1
     if argv[0] == "--daemon":
-        daemon()
-        return 0
+        return daemon()
     if argv[0] == "--send":                    # hand the rest to a running daemon
+        if daemon_pid() is None:
+            print("no keyboard daemon is running; start one with --daemon", file=sys.stderr)
+            return 1
         with open(FIFO, "w") as f:
             f.write(" ".join(argv[1:]) + "\n")
         return 0
