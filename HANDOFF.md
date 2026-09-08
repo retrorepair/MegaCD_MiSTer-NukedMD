@@ -1712,3 +1712,10 @@ right order to matter, and removing it moves us toward the hardware rather than 
 It is also a change to the most timing-critical shared module in the design, and it is zero-sum
 in bandwidth: the main CPU would wait instead. Worth doing carefully, with the 256-offset sweep
 as the measurement, not casually.
+
+### Which build to use
+
+**Build 58** (`090924c` and later) is the one to run. Build 56 is otherwise the best-tested build
+of the night - 47 runs, 46 byte-identical - but it carries the sync-insertion latch described
+above, so pausing CD-DA off a sector boundary can stop the decoder interrupt until software
+rewrites the CDC. Builds 51-56 in `releases/` are kept for the record, not for use.
