@@ -2118,3 +2118,18 @@ does, so removal is the full cold-boot reset - SRES, VDP reset, both 68000s, MCD
 Faithful because a cartridge cannot be hot-removed on real hardware: removal is a power cycle.
 Verifying on hardware next; if it lands on the Mega CD BIOS, a final build drops the menumask
 instrumentation.
+
+### CARTRIDGE FIX CONFIRMED ON HARDWARE (build 61)
+
+Build 61 (45b664e: cart_remove drives md_reset - the full power-cycle reset). BIOS + Alien 3 cart
+loaded, then "Remove Cartridge & Reset":
+
+| step | screen | cdd/10s |
+|---|---|---|
+| BIOS + cart | Alien 3 running | 0 (cart) |
+| after R[37] | **Mega CD BIOS "PRESS THE START BUTTON"** | **1005 (BIOS alive, drive polling)** |
+
+Fixed. Before (build 60 and earlier) this left a frozen Alien 3 frame with cdd=0; now it lands
+cleanly on the Mega CD BIOS. The full reset (SRES -> VDP + FC1004 reset, MCD-up-before-CPU
+ordering) is what was missing. Next: fold in the standalone warm-reset OSD item and drop the
+menumask instrumentation for the release build.
