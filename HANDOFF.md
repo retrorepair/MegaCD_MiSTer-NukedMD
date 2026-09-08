@@ -1400,3 +1400,19 @@ straight off a normal load, with no force-US hotkey.
 
 Timing improved too: **-1.694 @107 MHz (TNS -664)**, up from -2.141 (TNS -889) in build 51,
 and +0.121 @53.7 MHz.
+
+### The default BIOS on this machine is European, and that is now visible
+
+Running the verificator from a disc image in `games/MegaCD/local/` produced PAL numbers again -
+VAR 23732 ERROR 02, IRQ 227 ERROR 09, REG 8030 1275 ERROR 07. Not a regression: with no
+`cd_bios.rom` beside the image, Main falls back to `HomeDir()/boot.rom`, which here resolves to
+`cifs/MegaCD/boot.rom`, and that image has **'E' at $1F0**. `games/MegaCD/boot.rom` is a 'U'.
+
+So the region fix is doing exactly its job - the console's video standard follows the BIOS, and
+a European BIOS gives a European machine whose main 68000 runs 0.912% slower. The verificator's
+VAR 02 / IRQ 09 / REG 8030 07 windows are calibrated for NTSC and legitimately fail on a PAL
+console, as they would on a real European Mega CD.
+
+The `MegaCD_verif_disc.mgl` used for testing points at a game folder that has its own
+`usa/cd_bios.rom`, which is why it comes up NTSC. To get NTSC anywhere else, either put a US
+BIOS at the fallback path or set Region explicitly in the OSD.
