@@ -35,13 +35,26 @@ per session.
 "Eject Disc" opens the tray without resetting anything, so the running BIOS or game sees the
 disc go away as on hardware. "Reset & Eject CD" does both.
 
-"Disc Insert" chooses what a *new* disc does. Default **Reset**: the machine restarts with
-that game's BIOS, save file and cheats, which is what a flat folder of unrelated games wants.
-**Keep Running** swaps the disc in the drive with the core still running, for multi-disc games
-kept in their own folder. Both need the patched Main (see releases/main_mister); the choice is
-read there, in mcd_set_image(), not in the core.
+Inserting a disc is a tray-close, as on hardware: the drive reports tray-open then disc-present
+and the running BIOS boots it (a running game halts until you press Reset) - the machine is NOT
+reset and the BIOS is not reloaded. "Disc Insert" then chooses what a *different* game gets:
+default **Reset** swaps to that game's save file and cheats (right for a flat folder of unrelated
+games); **Keep Running** keeps the current game's, for multi-disc games kept in their own folder.
+The one thing that still restarts the machine is a disc whose folder ships its own `cd_bios.rom`
+(or `cart.rom`) - that is a real BIOS/cartridge swap and cannot happen under a running CPU. All of
+this lives in the patched Main (see releases/main_mister), in mcd_set_image(), not in the core.
+
+A warm reset ("Reset", the front button) does not reset the CD unit - on the real machine the
+console's reset button never asserts the Mega CD's FRES (Genesis Plus GX: "FRES is only asserted
+on Power ON") - and preserves work RAM, so MD carts like X-Men that need reset-to-continue work.
 
 ### Known issues:
+- **Warm reset with a disc in the drive** ("Reset" / the front button) returns to the Mega CD BIOS
+  as it should, but the BIOS then shows "Put a DISC on the CD tray" instead of loading the disc
+  that is still in the tray. Press START twice (the BIOS's own tray open/close) and it boots
+  normally. Root cause is core-side - the CDC/gate array during the BIOS's post-reset boot read -
+  see HANDOFF.md "RELEASE 2026-09-08". "Reset & Eject CD" and "Remove Cartridge & Reset" are fine.
+- mcd-verificator IRQ test 0A fails (hardware-marginal interrupt latency; everything else passes).
 - Microcosm & Ultraverse Prime (US) - graphic glitch in game
 - Supreme Warrior - Ying Heung (US) - can't select 2 disk
 

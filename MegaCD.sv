@@ -410,7 +410,6 @@ wire loading = rom_download | bk_loading | RESET | cart_clearing; // the cartrid
 
 reg        btn_reset;
 reg        md_reset;
-reg        ram_clear;
 reg        s_reset;
 reg [15:1] ram_rst_a;
 always @(posedge clk_md) begin
@@ -425,26 +424,22 @@ always @(posedge clk_md) begin
 
 	s_reset <= (cnt < 3);
 
-	// Every reset source drives the FULL CHIP reset (md_reset), not just btn_reset.  On the Mega CD
-	// a reset must reset the whole machine together - the FC1004 gate array (SRES), the VDP, and
-	// both 68000s - because the reset line is shared between the console and the CD unit; btn_reset
-	// alone gives the main 68000 only a ~17 us warm pulse via the FC1004 WRES pin and leaves SRES
-	// low, so the VDP keeps its last frame, the gate-array decode latches keep stale state, and the
-	// CPU restarts before the CD ASIC's ROM path is up (on hardware the BIOS ROM is always readable;
-	// here it is served through the ASIC, so the ASIC must be up before the CPU's first fetch).
-	// Confirmed on hardware: a warm-only reset FROZE both "Remove Cartridge & Reset" (stale Alien 3
-	// frame, no drive poll) and the standalone "Reset" (Cobra frozen mid-FMV).
-	//
-	// BUT a reset must NOT clear work RAM - real hardware preserves DRAM across the reset pulse, and
-	// games like X-Men (MD cart) REQUIRE pressing reset to continue: their reset handler reads a
-	// flag left in work RAM.  So the RAM clear/Z80-C7 sweeps are gated on `ram_clear` (cold boot /
-	// BIOS download = `loading` only) while the chip reset `md_reset` fires on every reset edge.
-	if(loading | (~old_reset & reset)) md_reset <= 1;
-	else if(cnt == 3)                  md_reset <= 0;
-
-	// RAM clear sweep: cold boot / BIOS download only, so a plain reset preserves work RAM.
-	if(loading)       ram_clear <= 1;
-	else if(cnt == 3) ram_clear <= 0;
+	// Reset topology - faithful to a real Mega CD, whose reset line is SHARED across the console and
+	// the CD unit but whose front Reset button is a WARM reset:
+	//   * `loading` (cold boot / BIOS or ROM download / cart-SRAM clear) is the ONLY full power-on
+	//     reset.  It drives `md_reset`, which asserts the FC1004 SRES (VDP, gate array and both
+	//     68000s held together) and runs the work-RAM / Z80-C7 clear sweeps.
+	//   * every user reset (front Reset button, OSD Reset, Remove-Cartridge, region change) is a WARM
+	//     reset via `btn_reset` -> FC1004 WRES: on the real die a fixed ~17 us RESET+HALT pulse to the
+	//     main 68000 (holding the button longer does not lengthen it).  The CD block is NOT reset -
+	//     the console's reset button does not assert the Mega CD's FRES (see the MCD.RST_N note) - so
+	//     its BIOS-ROM path stays live for the restarting 68000, which re-runs the BIOS; the BIOS
+	//     re-inits the CD side through the gate array.  A warm reset preserves work RAM (real DRAM
+	//     survives, and MD carts like X-Men REQUIRE it - their reset handler reads a flag left in work
+	//     RAM) and the VDP (WRES does not assert SRES), so the RAM/Z80 clear sweeps ride `md_reset`
+	//     and never run on a warm reset.
+	if(loading)       md_reset <= 1;
+	else if(cnt == 3) md_reset <= 0;
 
 	if(~old_reset & reset) btn_reset <= 1;
 	else if(&cnt)          btn_reset <= 0;
@@ -679,7 +674,7 @@ md_board md_board
 // porta_we_reg, -1.9 to -6.2 ns) and a lost byte write to work RAM hangs the BIOS. The 68000 holds
 // address and data for several MCLK cycles around the strobe, so the write side goes through a
 // register stage and is performed one MCLK (9.3 ns) later on port B; reads keep the direct
-// address on port A. During ram_clear (cold boot / BIOS download only) port B runs the RAM clear sweep.
+// address on port A. During md_reset (cold boot / BIOS or ROM download only) port B runs the RAM clear sweep.
 reg [14:0] ram_68k_wa;
 reg [15:0] ram_68k_wd;
 reg  [1:0] ram_68k_wbe;
@@ -698,10 +693,10 @@ dpram #(15,16) ram_68k
 	.address_a(ram_68k_address),
 	.q_a(ram_68k_o),
 
-	.address_b(ram_clear ? ram_rst_a : ram_68k_wa),
-	.data_b(ram_clear ? 16'd0 : ram_68k_wd),
-	.byteena_b(ram_clear ? 2'b11 : ram_68k_wbe),
-	.wren_b(ram_clear | ram_68k_wwe)
+	.address_b(md_reset ? ram_rst_a : ram_68k_wa),
+	.data_b(md_reset ? 16'd0 : ram_68k_wd),
+	.byteena_b(md_reset ? 2'b11 : ram_68k_wbe),
+	.wren_b(md_reset | ram_68k_wwe)
 );
 
 dpram #(13,8) ram_z80k
@@ -714,7 +709,7 @@ dpram #(13,8) ram_z80k
 	.q_a(ram_z80_o),
 
 	.address_b(ram_rst_a[13:1]),
-	.wren_b(ram_clear),
+	.wren_b(md_reset),
 	.data_b(8'hC7) // reset instruction to fix Titan 2 bug
 );
 
@@ -842,7 +837,15 @@ CEGen mcd_cegen
 
 MCD MCD
 (
-	.RST_N(~(md_reset | btn_reset)),
+	// A warm reset (btn_reset) does NOT reset the CD block.  On the real machine the console's reset
+	// button restarts the Mega Drive side only; the Mega CD's own reset (FRES) is asserted at power-on
+	// only - Genesis Plus GX genesis.c: "FRES is only asserted on Power ON" (gen_reset() calls
+	// scd_reset(1) solely for a hard reset).  The BIOS then re-initialises the CD side through the
+	// gate-array registers: its SRES write resets the sub-CPU, and its 68000 RESET instructions pulse
+	// ERES_N to the CDC/CDD.  Holding the block on btn_reset (~9.5 ms) also parked its BIOS-ROM path
+	// while the 68000 had already restarted after its ~17 us WRES pulse, which froze CD games.  Only
+	// the full power-on reset (md_reset = loading) hardware-resets the block.
+	.RST_N(~md_reset),
 	.CLK(clk_sys),
 	.MCLK(clk_ram),   // Nuked 68000 sub-CPU model sampling clock
 	.ENABLE(1'b1),   // every clock: the block's single-clock strobes (CD data, sample enables) must not be skipped

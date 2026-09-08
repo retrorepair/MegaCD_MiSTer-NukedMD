@@ -2216,3 +2216,184 @@ not). Recovers ~93 ns, 4->1 miss/256 (per-run pass ~1.8% -> ~37%). Full 0/256 ad
 a clean 12.5 MHz sub clock (a dedicated 50/100 MHz PLL output -> clean /4 into ASIC.CLK_CNT,
 crossing into the clk_sys gate-array domain) - larger and riskier; 0A is genuinely
 hardware-marginal (the faithful real board itself only clears the deadline by ~10 ns).
+
+## Build 65 (2026-09-08): WARM reset done right — builds 63/64 approach REJECTED and reverted
+
+Owner rejected the build-63/64 direction ("a hard reset with a ram retention kludge isn't
+acceptable") and was right. Those builds made EVERY reset drive `md_reset` (full FC1004 SRES:
+VDP + gate array + both 68000s) and then bolted on a `ram_clear` split so a plain reset would
+skip the work-RAM sweep. That is a hard reset pretending to be warm.
+
+### What the reset button actually is (verified in the RTL, not assumed)
+- `md_board.v`: `SRES = ~ext_reset` (=`~md_reset`), `WRES = ~reset_button` (=`~btn_reset`).
+  The 68000 /RESET pin = `~(ym_RESET_pull | m68k_RESET_pull | ext_vres)`.
+- `ym6045_rtl.v` (die-derived FC1004 arbiter): WRES is sampled by `dff69` off the ripple counter
+  `dff68→dff71→dff72→dff76→dff63→dff52→dff65→dff67→dff74`. So **WRES gives the main 68000 a FIXED
+  warm RESET+HALT pulse (~17 us); holding the button longer does NOT lengthen it** — the width is
+  set by the FC1004's own counter, and this is die-accurate (must not touch). SRES instead holds
+  the whole chain for as long as it is asserted.
+- So a real Mega CD front Reset button = a warm ~17 us 68000 pulse. The 68000 restarts into the
+  BIOS, which re-inits the CD side (halts/reloads the sub-CPU via A12000). Work RAM survives
+  (real DRAM keeps state across the pulse — X-Men's reset-to-continue depends on it).
+
+### Root cause of the CD-game freeze (the real bug, not "duration")
+`MCD.RST_N` was `~(md_reset | btn_reset)`. `btn_reset` is asserted ~9.5 ms (until `cnt==31`, the
+time the FC1004 needs to detect the warm pulse). So a warm reset held the ENTIRE CD block for
+~9.5 ms while the 68000 got only its ~17 us WRES pulse and restarted almost immediately — into a
+CD block whose BIOS-ROM-serving state machine was parked. It fetched garbage → freeze. On real
+hardware the BIOS ROM is a separate always-readable chip, so the CPU restarts straight into it.
+The `MCD.RST_N ← btn_reset` coupling is srg320's synthetic-model integration choice, NOT a
+hardware fact.
+
+### The fix (MegaCD.sv, faithful, minimal)
+1. `md_reset` fires on `loading` only (cold boot / BIOS or ROM download / cart-SRAM clear) — the
+   only full power-on reset. Reverted the build-63/64 "md_reset on every reset edge".
+2. Removed the `ram_clear` reg/split; the work-RAM and Z80-C7 clear sweeps ride `md_reset` again,
+   so a warm reset preserves RAM *naturally* (no kludge) and cold boot still clears it.
+3. `MCD.RST_N = ~md_reset` (was `~(md_reset | btn_reset)`): a warm reset no longer holds the CD
+   block, so its BIOS-ROM path stays live and the restarting 68000's first fetch succeeds. Only
+   the full power-on reset hardware-resets the block; the BIOS re-inits it on a warm reset, as HW.
+
+Net: `reset = host_reset(R[0]) | cart_remove(R[37]) | buttons[1] | region_set` → warm `btn_reset`;
+`loading` → `md_reset`. RAM preserved on all warm resets; VDP not reset on warm (WRES doesn't SRES).
+
+### Must verify on hardware (build 65)
+- Cold boot → Mega CD BIOS with drive polling (md_reset/loading path intact).
+- **Warm reset of a running CD game (R[1]) → game RESTARTS, no freeze** (this is the primary fix;
+  build 62 froze here). Owner also saw garbled-audio-that-cleared on "Reset & Eject CD" (R[0]).
+- Cart removal (R[37]) → Mega CD BIOS (was confirmed via md_reset on b61; now goes via the warm
+  path + rom_cart_mode=0 + CD block NOT reset — re-confirm it still lands on the BIOS).
+- mcd-verificator still 11/12 NTSC (only IRQ 0A, deferred).
+
+## Build 66 (2026-09-08): warm reset REDONE — hold the 68000 (ext_vres), reset the CD block WITH it
+
+Build 65 verified on hardware: the warm-reset FREEZE is gone (Cobra warm reset -> Mega CD BIOS,
+alive and animating), BUT it lands on the BIOS "Put a DISC on the CD tray" screen instead of
+re-booting the game.  Build 65 fixed the freeze the WRONG way - by decoupling MCD.RST_N from
+btn_reset (CD block NOT reset on a warm reset).  That left the core's CDC stale while Main still
+reset its CDD (R[1] -> mcd_reset -> need_reset -> cdd.Reset(), which keeps the disc loaded at
+CD_STAT_STOP), so the re-run BIOS could not re-detect the disc.  The owner's model was right: the
+Mega CD reset line is SHARED, so the CD block must reset too.
+
+**Correct fix (build 66):**
+- `MCD.RST_N` back to `~(md_reset | btn_reset)` - a warm reset resets the CD block again, re-syncing
+  the CDC with Main's CDD so the BIOS re-detects the disc and re-boots the game.
+- **`md_board .ext_vres = btn_reset`** (was tied 0) - holds the main 68000 in RESET+HALT for the
+  WHOLE btn_reset window (~9.5 ms) so it is released TOGETHER with the CD block, not after the
+  FC1004's fixed ~17 us WRES pulse.  Without this the 68000 restarts into the still-held block's
+  parked BIOS-ROM path -> garbage -> the original freeze.  ext_vres feeds only the 68000 RESET/HALT
+  in md_board (verified: md_board.v lines 842-843 only), so the VDP and work RAM are untouched - it
+  stays a warm reset.  This models the CD unit driving the expansion reset back to the console 68000
+  while the CD subsystem re-inits.
+- `md_reset` still fires on `loading` only; RAM/Z80 sweeps still ride `md_reset`; RAM preserved on
+  every warm reset (X-Men reset-to-continue).
+
+Net warm-reset behaviour expected on build 66: front Reset / OSD Reset (R[1], keep disc) -> BIOS
+re-boots the disc (game restarts); no cart + no disc -> BIOS idle screen; cart in (X-Men) -> cart
+restarts with work RAM intact; "Reset & Eject CD" (R[0]) -> no-disc BIOS.  No freeze in any case.
+
+Build note: build 65's first Quartus run hit the intermittent quartus_fit Access Violation; 4 wedged
+quartus_* zombies (some days old) blocked taskkill/Stop-Process and had to be killed with CIM
+Invoke-CimMethod Terminate.  The b65 timing report's only negative slacks (-2.875 / -0.496) are PLL-
+internal divclk nodes (vcoph->vco0ph->divclk, in the async clock-group) - the standard altera_pll
+artifact, present in the b62 report too; no fabric path fails.
+
+## CORRECTION (2026-09-08 evening): build 66 IS the fix; the Main "disc unmount" chase was wrong
+
+Owner's definitive statement of the required warm-reset behaviour (Mega CD, disc in tray):
+> "reset is pressed, the HARDWARE resets, the HPS keeps the disc loaded. That's it."
+> The game CAN start automatically - exactly as a real Mega CD boots the disc still in the tray after
+> a reset. (Earlier "game shouldn't start from title" meant it must not RESUME mid-game; a fresh boot
+> from the disc via the BIOS is correct.)  Mega CD differs from the MegaDrive here: an MD cart
+> restarts its game with work RAM intact (X-Men); a Mega CD goes back through the BIOS.
+
+What was actually wrong, in order:
+- **Build 65** (MCD.RST_N decoupled from btn_reset so the CD block is NOT reset on a warm reset) fixed
+  the freeze but left the BIOS at "Put a DISC on the CD tray": the CD block never re-synced its CDD
+  with the drive after the console reset, so the disc was never re-detected. Wrong lever.
+- I then spent ~1 h hunting a Main-side "ISO unmount" that does not exist. The Main log proves it:
+  between the Cobra load and the reset there is NO `Eject image` and NO empty-drive reset; Main held
+  `cdd.loaded=1` throughout. ("Eject image from 0 slot" is printed by the LOAD - mcd_set_image ejects
+  the previous image before mounting - not by the reset.)  The agent's proposed patch (skip the full
+  `cdd.Reset()` on the core's 0xFF pulse when a disc is loaded, just set STOP) FROZE the BIOS - it
+  broke the CDD command/response handshake - and was reverted. Main is back to the release binary
+  (md5 7f4bed06); Main source is clean (git checkout). **No Main change is needed for the warm reset.**
+- The core sends one `0xFF` CDD-reset to Main per MCD_RST_N falling edge (MegaCD.sv ~1287), and
+  MCD_RST_N/ERES_N is pulsed on every 68000 RESET instruction the BIOS executes (ASIC.vhd ~322-342),
+  so the `MCD: request to reset` lines are normal BIOS-init traffic (cold boot produces them too and
+  boots fine). The full `cdd.Reset()` they trigger keeps the disc (`loaded`/toc untouched, status=STOP).
+
+**Build 66 (compiling 20:44)** = the correct core fix, unchanged from its first description above:
+`MCD.RST_N = ~(md_reset | btn_reset)` (CD block resets WITH the console - shared reset - so the CDD
+re-syncs and the disc is re-detected) + `md_board .ext_vres = btn_reset` (68000 held in RESET+HALT for
+the whole ~9.5 ms window so it is released together with the block and does not restart into a parked
+ROM path - the freeze). `md_reset` = loading only; RAM sweeps ride md_reset; work RAM preserved.
+Expected on hardware: warm reset of running Cobra -> brief BIOS boot -> Cobra re-boots fresh from the
+disc. No freeze, no "insert disc". Cold boot, cart removal (R[37]) and verificator must still pass.
+
+Still open (Main, AFTER build 66 is verified): owner does not want "Disc Insert" (OSD file browser)
+to force a machine reset when sitting at the BIOS - mcd_set_image's `if(!same_game){status[0]
+pulse; reload BIOS}` should become a faithful tray-close (mirror of mcd_eject's tray-open) so the
+running BIOS detects and boots the inserted disc; a genuine different-game change must still get its
+correct BIOS/save/cheats. Do NOT touch Main for the warm reset itself.
+
+## RELEASE 2026-09-08 — build 65 core + Main df2f120f (what is verified, what is not)
+
+**Shipped:** `releases/MegaCD_TEST_NukedMD_b65_20260908.rbf` (= `MegaCD_TEST_NukedMD_20260908.rbf`,
+md5 88359aef) + `releases/main_mister/MiSTer` (md5 df2f120f).  Core source = build 65 exactly (see
+below).  Owner's call: "if it's only this reset shit stopping it just release it."
+
+**Verified on hardware today (b65 + this Main):** cold boot -> BIOS -> Cobra boots; "Remove Cartridge
+& Reset" (Alien 3) -> Mega CD BIOS; no warm-reset freeze; mcd-verificator 11/12 NTSC (only IRQ 0A, the
+known hardware-marginal one); disc insert via mcd_set_image no longer pulses status[0]/reloads the
+BIOS (tray-close semantics) - EXCEPT when the disc's folder ships its own cd_bios.rom that differs from
+the running BIOS (the rr-sega-mega-cd library does: three distinct BIOS md5s), which is a genuine
+BIOS swap and still resets, as it must.
+
+**Known issue (documented, not fixed): warm reset ("Reset"/front button) with a disc in the drive.**
+Landing on the Mega CD BIOS is correct.  From there the BIOS should see the disc still in the tray and
+auto-load it (BIOS 1.10) or show "press start" (2.00).  Instead it shows "Put a DISC on the CD tray";
+pressing START twice (the BIOS's own tray open/close) then boots the disc normally.  Root cause is
+CORE-side, established by CDD command tracing (Main-side printf, since removed):
+- Main's drive state at the BIOS's boot PLAY is identical between the working cold boot and the
+  failing warm reset (same lba/index/latency/isData; ReadData() reads by LBA with the GPGX pregap
+  guard, so header N carries payload N).  Main keeps the disc mounted (`loaded=1`) throughout; there
+  is no eject on the reset itself.
+- The BIOS reads the TOC correctly after the reset, aborts its first SEEK (normal spin-up sequence,
+  same on cold boot), then - unlike the cold path, which retries TOC->SEEK->wait->PAUSE->PLAY - takes
+  a preserved-work-RAM shortcut: PAUSE -> PLAY from 00:01:73 without a completed seek.  On real
+  hardware that read succeeds; in this core the data the CDC/gate array serve for that sequence fails
+  the BIOS's validation, and after ~1.8 s it issues STOP then TRAY_OPEN (op=D) itself.
+- It fails identically whether the CD block is hardware-reset on the warm reset (b66) or preserved
+  (b65), so the CD-block reset is not the variable.  Two Main-side "fixes" were tried and reverted:
+  presenting OPEN or TOC on the reset (both make the BIOS's init reset the sub-system for ever - its
+  init tolerates only STOP, and the core re-issues the drive reset on every 68000 RESET instruction);
+  a Main-driven door cycle (the BIOS ignores drive-initiated status changes; its new-disc boot is
+  entered only by its OWN TRAY_CLOSE command).
+- Kept from that work (both correct and harmless): SeekToLBA only carries a running latency over when
+  the drive is really moving (PLAY/SEEK/SCAN), so the first SEEK after a reset takes its full seek
+  time; and Reset() stays STOP/10 with the reason documented.
+- **Next step (next release):** core telemetry of the sub-CPU bus / CDC register writes during a cold
+  boot vs a warm reset (MCD_TELEMETRY was compiled out for fit - check headroom first; the design is
+  at 84 % ALMs / 519 M10K), to see which CDC/gate-array register or timing the BIOS's shortcut relies
+  on that this model gets wrong.  Compare against Genesis Plus GX cdc.c / scd.c register behaviour.
+
+**Reset topology decision (core = build 65):** the console's reset button does NOT reset the CD block.
+Genesis Plus GX genesis.c is explicit - "FRES is only asserted on Power ON"; gen_reset() calls
+scd_reset(1) only for a hard reset - so the Mega CD hardware survives a warm reset and the BIOS
+re-initialises it through the gate-array registers.  `MCD.RST_N = ~md_reset`, `ext_vres = 1'b0`,
+`md_reset` on `loading` only, RAM/Z80 clear sweeps on `md_reset` (work RAM preserved on a warm reset).
+Build 66 (CD block re-coupled + ext_vres hold) was built and tested, behaves the same on the warm
+reset, and is NOT shipped; its rbf is `scratchpad/b66.rbf` (3dd11b7b) if ever needed.
+
+**Main (retrorepair/Main_MiSTer, megacd-nukedmd):** megacd.cpp mcd_set_image = tray-close (no
+status[0] pulse, no BIOS reload; per-game cd_bios.rom/cart.rom still load - and reset - only if the
+file exists; "CD BIOS not found" warns only if <home>/boot.rom is missing too); megacdd.cpp SeekToLBA
+in-flight rule + Reset() comment.  The OSD "Disc Insert: Reset | Keep Running" label is now slightly
+misleading (it decides save/cheat swapping, not a machine reset) - CONF_STR rename for a later core.
+
+**Test-method lessons:** the OSD is invisible to screenshots and blind key navigation can silently
+drop keys (five UPs left the cursor on "Insert Disk" once); when a result hinges on WHICH item was
+selected, have the owner select it, or verify from the log (an R[0] unloads the disc - `ld=0`,
+`Eject image` - an R[1] does not).  `uniq -c | head` on a trace can hide the interesting part behind
+hundreds of pre-event polls - anchor on the event line first.
