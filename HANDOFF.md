@@ -2087,3 +2087,34 @@ Fix candidates, faithful-hardware first:
    `loading` does, giving the exact cold-boot ordered reset (work-RAM sweep, mcd_cart reset, SRES,
    MCD-first release). More clearly correct - a cartridge cannot be hot-removed on real hardware,
    so removal *is* a power cycle - and it also fixes fault-1's stale-VRAM cosmetics for free.
+
+### FULLY DIAGNOSED + FIX BUILDING (build 61)
+
+The definitive hardware run (build 59 with rom_cart_mode on menumask bit 10 + a CDD-logging
+Main) resolves it:
+
+| step | RTRACE (from Main) | screen | cdd/10s |
+|---|---|---|---|
+| BIOS + Alien 3 cart loaded | - | Alien 3 running | 0 (cart, expected) |
+| R[37] press #1 | `bit=37 mask=053c cartmode=1 removeseen=0` | Alien 3 frame, frozen | 0 |
+| R[37] press #2 | `bit=37 mask=093c cartmode=0 removeseen=1` | same frozen frame (identical md5) | 0 |
+
+So `rom_cart_mode` **does** clear to 0, the BIOS **is** resident - and the CD BIOS still does not
+run: the screen holds a frozen Alien 3 gameplay frame and the drive is never polled. That kills
+both earlier theories (it is neither "the map failed to switch" nor "the reset was too short to
+restart the CPU"): the map is correct and a warm reset restarts the CPU fine when the BIOS is
+already up (the empty-slot F3 test).
+
+The distinguishing fact is the **frozen VDP image**. `cart_remove` reaches the FC1004 only through
+its warm-reset pin (WRES); the FC1004 **system reset (SRES)**, which is what resets the VDP and
+the gate-array decode latches, is never asserted (only `loading` -> `md_reset` -> `.ext_reset`
+-> SRES does that). So after `cart_remove`: the VDP keeps rendering the cartridge's last frame,
+the decode latches keep cartridge-era state, and the main 68000 - given only the ~17 us WRES
+pulse while the MCD is still in its btn_reset window - restarts before the MCD and is lost. An
+already-running BIOS survives a warm reset (F3) because nothing has to switch or be re-reset.
+
+**Fix (build 61, 45b664e):** drive `md_reset` on the `cart_remove` edge, exactly as `loading`
+does, so removal is the full cold-boot reset - SRES, VDP reset, both 68000s, MCD-up-before-CPU.
+Faithful because a cartridge cannot be hot-removed on real hardware: removal is a power cycle.
+Verifying on hardware next; if it lands on the Mega CD BIOS, a final build drops the menumask
+instrumentation.
