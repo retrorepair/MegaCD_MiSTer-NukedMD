@@ -1988,3 +1988,22 @@ same full re-initialisation a BIOS load does rather than a short reset pulse. (1
 path understood first - do not paper over it by disabling TMSS.
 
 The user's `MegaCD.CFG` has been restored to TMSS enabled.
+
+### The TMSS split, re-run cleanly (one keyboard daemon)
+
+Caveat first: eight keyboard daemons and nine virtual keyboards had accumulated on the MiSTer
+over the night (every "restart MiSTer, start a daemon" added one and never killed the last), and
+a `--send` line goes to whichever daemon reads the FIFO first - including ones whose device
+MiSTer never opened. So key-driven hardware results taken in the last few hours carried a silent
+failure mode. The tool is now a pidfile singleton (8c239e0). Re-run with exactly one daemon,
+one virtual keyboard, and a reset counted in the log after every keypress:
+
+| run | TMSS | reset seen | after "Remove Cartridge & Reset" |
+|---|---|---|---|
+| 1 | off | yes | **black screen** (1416-byte PNG, md5 05351dcc) |
+| 2 | off | yes | **black screen** (identical md5) |
+| 3 | on | yes | **Alien 3 boots again** (md5 776f60fd) |
+
+Reproducible. Both faults stand exactly as described above: with TMSS on, the cartridge is
+mapped back after the reset; with TMSS off, the cartridge is gone but the Mega CD BIOS does
+not start. The user's `MegaCD.CFG` is restored to TMSS enabled.
