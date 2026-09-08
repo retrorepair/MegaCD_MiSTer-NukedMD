@@ -1955,3 +1955,34 @@ be the honest reading: cartridge removal is a power-cycle, and the core's reset 
 
 Test it cheaply before changing anything: hold the machine in reset for the same duration a BIOS
 download does after `cart_remove`, and see whether the BIOS then comes up.
+
+### TMSS splits the cartridge-removal bug in two
+
+Zero-build test: clear `O[9]` (TMSS) in `config/MegaCD.CFG` and repeat the removal.
+
+| TMSS | cartridge inserted | after "Remove Cartridge & Reset" |
+|---|---|---|
+| **on** (the user's setting) | Alien 3 boots | **Alien 3 boots again** |
+| **off** | Alien 3 boots | **black screen** |
+
+So there are two faults, not one, and `/CART` is not the broken part - with TMSS off the
+cartridge really is gone.
+
+1. **With TMSS on, something re-maps the cartridge after the reset.** `dff26`
+   (`ym6045.v:639`) is loaded from `vd8`, clocked by `w97` and reset by `sres_syncv_q`, and it
+   gates both `CE0` and `ROM` (`ym6045.v:644-657`). That is the TMSS bank bit: reset maps the
+   TMSS boot ROM, then the TMSS code writes it to switch. With `boot2.rom` loaded and TMSS
+   enabled, that switch is putting the cartridge back regardless of `/CART`.
+2. **With TMSS off, removal works but the Mega CD BIOS does not start** - black screen, where a
+   cold start with an empty slot boots the BIOS perfectly well. The difference is that
+   `rom_cart_mode` went 1 -> 0 with the machine already initialised, and the reset that
+   `cart_remove` produces is much shorter than the one a BIOS reload brings with it. That is
+   also the one asymmetry that has held all along: `R[0]` resets **and** reloads the BIOS and
+   reaches the Mega CD BIOS; `R[37]` only resets and does not.
+
+On real hardware you cannot change a cartridge without powering off, so "removal is a power
+cycle" may simply be the honest model, and the fix for (2) is for `cart_remove` to produce the
+same full re-initialisation a BIOS load does rather than a short reset pulse. (1) needs the TMSS
+path understood first - do not paper over it by disabling TMSS.
+
+The user's `MegaCD.CFG` has been restored to TMSS enabled.
