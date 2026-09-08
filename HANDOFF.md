@@ -1923,3 +1923,35 @@ Same RTL in 58 and 59 apart from the menumask instrumentation, so this is placem
 which is exactly what the E-phase model predicts, because the sub-CPU clock is an enable derived
 from a fractional divider and its alignment to the main CPU's loop shifts with timing. Do not read
 a good run as a fix, and do not read a build's rate as a property of the RTL.
+
+### ...and the fix was wrong. What is now ruled out
+
+Build 60 carried the `cart_data_en` gating to hardware and the cartridge still boots after
+"Remove Cartridge & Reset". So the wired-OR bus was not the mechanism, and 7123029's root-cause
+claim was wrong (reverted in 17bffe5). Ruled out so far, each with evidence:
+
+- **the OSD row / Main**: `RTRACE bit=37 ex=0 opt=[37],Rem`, and 2 UP / 4 UP give 38 / 0.
+- **the SPI transfer**: `STRACE set [37:37]=1 -> cur_status[4]=20`, and `hps_io.sv:471-478`
+  carries all 128 bits.
+- **`rom_cart_mode` itself**: instrumented onto the menumask - `cartmode=1` before, `cartmode=0`
+  after, with the sticky `removeseen` flag set.
+- **the BIOS not being resident**: the load log shows `boot.rom` sent at index 0.0 before the
+  cartridge at index 6.0.
+- **`mcd_cart` driving the bus with no cartridge**: gating `cart_data_en` on `rom_mode` changed
+  nothing.
+
+So the register clears, the map ought to flip, and it does not.
+
+**The lead I would follow next.** `/CART` reaches the decode through
+`ym6045.v:676 assign va22_cart = ~(va22_in ^ CART)`, and `va22_cart` gates `CE0`
+(`ym6045.v:659-660`) and `ROM` (`ym6045.v:678-679`). But those terms also carry **`dff26_nq`**
+(`w168 = ~(w69 | dff26_nq)`, `w173 = w101 | dff26_nq`, `w208 = dff26_nq ? ...`) - a flip-flop
+inside the FC1004. If `dff26` latches something at reset, then a short reset may not re-sample it
+while the long reset that accompanies a BIOS reload does. That would explain the one asymmetry
+left in the data: `R[0]` (reset **and** BIOS reload) reaches the Mega CD BIOS, `R[37]`
+(reset only) does not. Note this is a die-derived netlist, so the answer is what the real
+FC1004 does - and on real hardware you cannot swap a cartridge without powering off, which may
+be the honest reading: cartridge removal is a power-cycle, and the core's reset pulse is not one.
+
+Test it cheaply before changing anything: hold the machine in reset for the same duration a BIOS
+download does after `cart_remove`, and see whether the BIOS then comes up.
