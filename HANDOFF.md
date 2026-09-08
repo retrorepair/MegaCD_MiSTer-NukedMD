@@ -1594,3 +1594,34 @@ So the gap is probably larger than the 320 ns the bench suggests, not smaller - 
 conclusion stronger, not weaker: it is not reachable by shaving the gate array, and the honest
 next step is to pin the deadline exactly (single-step the main CPU's 6-NOP window in a bench
 that models both CPUs) rather than to optimise against a number with 520 ns of slop in it.
+
+## Handover note: what a combined 32X + MD + MCD core is up against
+
+Worth knowing before that project starts, because it decides the approach rather than being
+something to discover halfway in.
+
+This core, on its own, on the DE10-Nano's 5CSEBA6:
+
+| | used | available | |
+|---|---|---|---|
+| ALMs | 36,260 | 41,910 | 87% |
+| **M10K blocks** | **519** | **553** | **94%** |
+| block memory bits | 4,109,748 | 5,662,720 | 73% |
+| DSP | 56 | 112 | 50% |
+
+**M10K count is the binding constraint, not logic and not memory bits.** 34 blocks free, while
+only 73% of the bits are used - the die-derived models are full of small, oddly-shaped memories
+that each consume a whole block. That is what killed the telemetry build (build 49,
+"Can't fit design in device" at 88% ALM / 94% RAM) even though it needed very little.
+
+A 32X adds two SH-2s and a framebuffer. The framebuffer alone is 256 KB - about 205 M10K blocks
+if it lives in block RAM, against 34 free. It has to go in SDRAM, and SDRAM on this board is
+already carrying the Mega CD PRG-RAM, word RAM, PCM wave RAM, the BIOS and the cartridge, with a
+fixed-priority arbiter (`rtl/sdram.sv:147-201`) whose ordering already shows up in the sub-CPU's
+worst-case latency.
+
+So the user's own framing - "even if it means accuracy compromises" - is the right one, and the
+compromise that buys the most room is specifically **the die-derived NukedMD models**: they are
+what makes this core 87%/94% and what puts every one of the worst 25 timing paths where nothing
+can be done about them. A behavioural VDP/68000/Z80 would free both the blocks and the 107 MHz
+critical path. Nothing else in this tree is close to that in cost.
