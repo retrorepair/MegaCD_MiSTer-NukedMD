@@ -1446,3 +1446,46 @@ internal events at 75 Hz to a few kHz rather than by the main CPU at will, so a 
 rare; and unlike INT2 nothing in the verificator exercises them, so a change here would be
 untested. Left alone deliberately. If they are fixed, note that levels 3 and 6 clear on **both**
 the acknowledge and `IEN(n) = 0`: only the acknowledge half should become an edge.
+
+## IRQ 0A: closed. Our side is at the hardware floor; the rest is the 68000
+
+Measured, not argued. A dedicated bench (`sim/cdc/irq/`) traces one sub-CPU level-2 exception
+bus cycle by bus cycle and sweeps the INT2 arrival across 120 sub-CPU clock offsets:
+
+- end to end **5411.4 / 6190.0 / 7097.3 ns** (min / mean / max) against the 6779 ns deadline,
+  **9 of 120 offsets miss (7.5%)**. 256 iterations per run, so a miss anywhere fails.
+- Worst case decomposes as **2281.9 ns finishing the interrupted instruction** + **996.6 ns of
+  interrupt acknowledge** + the fixed exception body. Both dominant terms are 68000 facts.
+- The gate array contributes **nothing measurable**: `/VPA` is asserted 0.0 ns after `/AS` in all
+  120 acknowledges, `IPL` rises with `INT_PEND(2)`, and DS->DTACK is **9.3 ns (one CLK) on 480 of
+  480 writes and 69 of 69 register reads**. The 83.8-102.5 ns AS->DTACK figure that looked like
+  gate-array latency is the 68000's own S2->S4 delay: it asserts `/DS` a full CPU clock later on
+  a write than on a read, and the decode is strobe-gated (`ASIC.vhd:840, 1404`), so the gate
+  array cannot see a write cycle until S4.
+- The `PRG_RDY` guard and the `PRS_END` return path, both suspected, **never fired once** in
+  1462 cycles.
+- No PRG-RAM read took a wait state in 1236 samples.
+
+Two variants were built in a scratch copy and swept: bypassing the MC68K MCLK output register,
+and acknowledging a write from `/AS` plus the decode. Both remove **every** write wait state.
+Neither closes the gap - 8/120 and 6/120 misses - and bypassing the output register makes the
+worst case *worse* (7172 ns). The reason is visible in which offsets fail: taking 240-320 ns out
+upstream just moves the timeline into a different E-clock phase, and the `/VPA` acknowledge hands
+it straight back. Acknowledge occupancy ranges 586.8-1313.3 ns across the sweep - a 727 ns
+lottery that dwarfs everything the gate array does.
+
+**So there is nothing honest left to take.** `/VPA` is what the hardware does (see the evidence
+above), the exception sequence is the 68000's, and both of our candidate savings are inside the
+noise of the E-phase it introduces. IRQ 0A is a genuinely marginal test: emulators that pass it
+do so by charging a *constant* interrupt cost (jgenesis uses 54 clocks) instead of modelling the
+E-clock synchronisation that real silicon has.
+
+One real finding did come out of it, and the comment at `MC68K.vhd:150-162` has been corrected:
+the MCLK output register is not free. Its 9.3 ns pushes `/DS` from 2 to 3 MCLK into S4, so the
+gate array's next CLK edge lands on the CPU's DTACK sample point whenever that half period is the
+short one - **403 of 480 writes take a wait state because of it**. It stays regardless, because
+removing it makes 0A worse and the 107 -> 53.7 MHz hazard it exists to fix is real.
+
+Next places to look, if anyone returns to this: the derivation of the 52-main-clock deadline
+itself (its bus-ordering assumption is worth +-4 clocks, i.e. +-520 ns, which is the whole
+argument), and the main-side A12000 write to `INT_PEND(2)` path, which is outside this bench.

@@ -157,9 +157,20 @@ begin
 	-- every MCLK (107 MHz) edge, while the gate array samples them in the 53.7 MHz domain. Handing
 	-- them over combinationally (builds 18-28) left long 107 -> 53.7 MHz paths whose slack varied
 	-- from fit to fit and was 1% tighter in NTSC than in PAL; the symptoms were fit-dependent PCM
-	-- pops and BIOS hangs in NTSC. Registering the outputs at MCLK adds 9.3 ns (a ninth of a CPU
-	-- clock), which lands in the same CE_F sample of the gate array as the direct outputs did, so
-	-- the bus-cycle timing verified on the bench (DTACK windows at 4/8/12 CLK) is unchanged.
+	-- pops and BIOS hangs in NTSC. Registering the outputs at MCLK is the compromise: it costs
+	-- 9.3 ns, a ninth of a CPU clock.
+	--
+	-- That is NOT free, contrary to what this comment used to claim. Measured over 120 sub-CPU
+	-- exception traces (sim/cdc/irq): the 9.3 ns pushes /DS from 2 to 3 MCLK into S4, so the gate
+	-- array's next CLK edge lands exactly on the S4 falling edge - the CPU's DTACK sample point -
+	-- whenever that half period is the short one. 403 of 480 PRG-RAM writes then take one wait
+	-- state; with the register bypassed, none of them do. Reads are unaffected (the 68000 asserts
+	-- /DS in S2 on a read) and 0 of 1236 took a wait state either way.
+	--
+	-- The register stays anyway: bypassing it made mcd-verificator IRQ 0A *worse*, not better
+	-- (worst case 7097 -> 7172 ns), because removing 240 ns upstream only shifts the /VPA
+	-- interrupt-acknowledge cycle into a different E-clock phase and it hands the time straight
+	-- back. Against that, the 107 -> 53.7 MHz hazard above is real and fit-dependent.
 	process( MCLK )
 	begin
 		if rising_edge(MCLK) then
