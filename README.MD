@@ -87,7 +87,7 @@ krikzz's hardware-validated Mega CD diagnostic, run on a real DE10-Nano.  Build 
 | CDC INIT | OK |
 | IRQ TEST | ERROR 0A |
 
-CDC INIT used to fail 62% of runs and is now 0 in 34; the CDC frame timer was expiring 27 ns
+CDC INIT used to fail 62% of runs and is now 0 in 69; the CDC frame timer was expiring 27 ns
 before each sector arrived, so sync insertion fired on every normal frame and woke the sub CPU
 to read a sector header that had not been latched yet.
 
