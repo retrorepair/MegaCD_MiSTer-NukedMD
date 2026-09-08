@@ -2050,3 +2050,40 @@ The single question is now fault 2's, and it applies to both TMSS settings: **wh
 68000 not run after the ~13 ms `cart_remove` reset, when a cold boot with an empty slot does, and
 when only the ~100 ms BIOS-download reset recovers it?** That is exactly what the reset-state
 audit and the sim bench are chasing.
+
+### ROOT CAUSE (diagnosed): a warm-reset ordering race - the 68000 restarts before the MCD
+
+A full reset-tree audit (recorded in the session log) nails it, and corrects two of my premises:
+the reset block is clocked at 107 MHz not clk_sys, so `s_reset` is **0.6-0.9 ms** not 4.3 ms; and
+**`cart_remove` never asserts `md_reset`** - only `loading` (cold boot / BIOS download) does.
+
+What `cart_remove` actually delivers:
+- `btn_reset`, which holds `MCD.RST_N` low for ~9.2-9.5 ms (`MegaCD.sv:831`), and
+- through the FC1004 **warm-reset** pin (`WRES`, `md_board.v:953`) only a single **~17 us**
+  68000 RESET+HALT pulse, fired at the next FC1004 sampler edge 0-8.55 ms after the OSD press.
+
+So the main 68000 comes out of its 17 us pulse **while `MCD.RST_N` is still low**. It fetches
+SSP/PC at 000000 through `/ROM` -> `EXT_ROM_N`, but the ASIC ROM state machine is held in IDLE
+(`ROM_CE_N=1`, `M68K_ROM_DTACK_N=1`, `ASIC.vhd:781-784,831`), nothing drives VD
+(`exp_data_en=0`, `MegaCD.sv:761`), the arbiter self-acknowledges the cycle and the CPU latches
+the recirculated bus-hold value (`md_board.v:778-788`) - i.e. garbage. It runs garbage and is
+lost by the time the MCD wakes 1-9 ms later; the sub-CPU stays held because nobody writes A12000.
+
+Cold boot and R[0] go through `loading` -> FC1004 **system** reset (SRES), which arms the
+dff57/58 hold that keeps the 68000 in reset until **~13.7 ms**, while `MCD.RST_N` releases at
+~9.5 ms - so the MCD is always up >4 ms before the CPU runs. A further short reset (F1/F2/F3,
+the keyboard reset) re-runs the identical race, which is why it looks like unrecoverable state.
+TMSS only decides what stale VRAM is left on screen.
+
+**Zero-build prediction that distinguishes this from anything cartridge-related:** warm-resetting
+a *running empty-slot BIOS* (no cartridge at all) should also black-screen. Testing that now.
+
+Fix candidates, faithful-hardware first:
+1. `MegaCD.sv:553 .ext_vres(1'b0)` -> `.ext_vres(btn_reset)`: holds the main 68000 in RESET+HALT
+   (`md_board.v:842-843`) for the whole `btn_reset` window, so it cannot restart before
+   `MCD.RST_N` releases; also closes the pre-pulse window where the old game runs on with /CART
+   already flipped. Minimal, and testable.
+2. Make `cart_remove` a full "power cycle": let it drive `md_reset` (`MegaCD.sv:432`) the way
+   `loading` does, giving the exact cold-boot ordered reset (work-RAM sweep, mcd_cart reset, SRES,
+   MCD-first release). More clearly correct - a cartridge cannot be hot-removed on real hardware,
+   so removal *is* a power cycle - and it also fixes fault-1's stale-VRAM cosmetics for free.
