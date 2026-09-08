@@ -1417,12 +1417,12 @@ The `MegaCD_verif_disc.mgl` used for testing points at a game folder that has it
 `usa/cd_bios.rom`, which is why it comes up NTSC. To get NTSC anywhere else, either put a US
 BIOS at the fallback path or set Region explicitly in the OSD.
 
-### Build 52 baseline for the two intermittents (14 runs)
+### Build 52 baseline for the two intermittents (24 runs)
 
 | test | failures |
 |---|---|
-| `IRQ TEST 0A` | 14/14 |
-| `CDC INIT 03` | 8/14 (57%) |
+| `IRQ TEST 0A` | 24/24 |
+| `CDC INIT 03` | 15/24 (62%) |
 
 Everything else OK in all 14. That is the number the CDC sync-insertion fix has to beat.
 
