@@ -660,16 +660,6 @@ end
 reg data_en;
 always @(posedge clk) data_en <= pier_eeprom_cs | sf_cs | chk_cs | jcart_cs;
 
-// An absent cartridge cannot drive the data bus. This was gated on /CE0 alone, so with no
-// cartridge in the slot the module still drove `cart_data` onto md_board's wired-OR VD
-// (md_board.v:778-788). From power-up that is harmless - `cart_data` is still zero and ORing zero
-// changes nothing, which is why booting with an empty slot always worked. After a cartridge has
-// been loaded and then removed it is not: `cart_data` holds real cartridge data and corrupts
-// every read the Mega CD answers. That is why "Remove Cartridge & Reset" reset the machine and
-// then came straight back up running the cartridge.
-//
-// In ROM mode the cartridge owns the cycle. With no ROM cartridge only the RAM cartridge's own
-// windows may drive, and they are already ~rom_mode-gated, so an empty slot now drives nothing.
-assign cart_data_en = cart_oe & ((cart_cs & (rom_mode | ram_id_sel | ram_wp_sel | ram_mem_sel)) | data_en);
+assign cart_data_en = cart_oe & (cart_cs | data_en);
 
 endmodule
