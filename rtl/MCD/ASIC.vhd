@@ -621,7 +621,13 @@ begin
 							if EXT_UDS_N = '0' then
 								HIB(15 downto 8) <= EXT_VDI(15 downto 8);
 							end if;
-						when "00100" => null;	--$A12008 CDC host data (read only)
+						when "00100" =>			--$A12008 CDC host data
+							-- A WRITE to the host data register consumes a word from the CDC buffer
+							-- exactly as a read does.  mcd-verificator CDC DMA3 sub-tests 0x60/0x61
+							-- write $498 bytes to A12008 mid-transfer, then read the remaining $498
+							-- and require EDT set with the data matching reference[$498..$92F] --
+							-- i.e. the writes must have advanced the host pointer past the first half.
+							MAIN_CPU_CDC_READ <= '1';
 						when "00101" => null;	--$A1200A Reserved
 						when "00110" => null;	--$A1200C Stop watch (read only)
 						when "00111" =>			--$A1200E Communication flag
@@ -970,7 +976,11 @@ begin
 									DMA_EDT_CLR <= '1';
 								end if;
 							when "0000011" => null;	--$FF8006 CDC register data (extern)
-							when "0000100" =>	null;	--$FF8008 CDC host data (read only)
+							when "0000100" =>			--$FF8008 CDC host data
+								-- As on the main side: a WRITE consumes a word from the CDC buffer
+								-- (mcd-verificator CDC DMA3 sub-tests 0x62/0x63 do the same $498-byte
+								-- write / $498-byte read sequence through the sub-CPU relay).
+								SUB_CPU_CDC_READ <= '1';
 							when "0000101" =>			--$FF800A CDC DMA address
 								DMAA(18 downto 3) <= S68K_DI(15 downto 0);
 								DMA_ADDR_SET <= '1';
