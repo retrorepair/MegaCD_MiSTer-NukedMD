@@ -218,3 +218,44 @@ RAM is the binding constraint at 94%, not logic. That is what killed the telemet
 is what any future addition has to fit inside.
 
 md5 18545bed (releases/MegaCD_TEST_NukedMD_b52_20260908.rbf).
+
+## Build 56 (2026-09-08) — best 107 MHz slack of this configuration
+
+Same netlist configuration as builds 40/52, plus the region fix, the CDC register fixes, the
+CDC sync-insertion guard, the edge-acknowledged INT2, and the cartridge/disc handling changes.
+`MCD_TELEMETRY` off, SEED 4.
+
+| Resource | Used | Available | |
+|---|---|---|---|
+| ALMs (logic utilization) | 36,193 | 41,910 | 86% |
+| M10K block RAM | 519 | 553 | 94% |
+
+Timing (slow 85C): **-1.550 @107 MHz (TNS -342)**, -0.340 @53.7 MHz (TNS -0.340, one endpoint).
+
+Recent history at this configuration, all SEED 4:
+
+| build | 107 MHz | TNS | 53.7 MHz |
+|---|---|---|---|
+| 40 | -1.971 | -650 | -0.115 |
+| 51 | -2.141 | -889 | +0.002 |
+| 52 | -1.694 | -664 | +0.121 |
+| 54 | -2.339 | -1784 | -0.081 |
+| **56** | **-1.550** | **-342** | -0.340 |
+
+The spread at a fixed seed is larger than most of the RTL changes between these builds, so treat
+a single build's slack as a sample.
+
+**Where the 107 MHz slack actually goes.** `quartus_sta -t tools/sta_paths.tcl` reports the worst
+failing paths; every one of the worst 25 is inside a die-derived model:
+
+    ym7101_rtl|io_address[1]              -> md_board|VD[4]      (VDP driving the video data bus)
+    m68kcpu:P68K|w23~0_OTERM341DUPLICATE  -> P68K|w981[1]        (gate-level sub-CPU)
+
+These are 1:1 conversions of die netlists and are not ours to restructure. The 107 MHz slack is
+therefore a property of running gate-level models at that clock on a Cyclone V, not a defect to
+chase in the MegaCD RTL.
+
+The 53.7 MHz failure is a **single** endpoint - `sdram|dout[11] -> ASIC|S68K_PRGRAM_DO[11]` at
+-0.340 while the next worst sibling bit makes it at +0.254. Placement, not logic.
+
+md5 795743d7 (releases/MegaCD_TEST_NukedMD_b56_20260908.rbf).

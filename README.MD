@@ -74,7 +74,8 @@ Place cartridge dump named cart.rom into game's folder
 # Accuracy
 
 The reference is [mcd-verificator](https://gendev.spritesmind.net/forum/viewtopic.php?t=3166),
-krikzz's hardware-validated Mega CD diagnostic, run on a real DE10-Nano. Build 52:
+krikzz's hardware-validated Mega CD diagnostic, run on a real DE10-Nano.  Build 56, over
+12 consecutive runs that came back byte-identical:
 
 | test | result |
 |---|---|
@@ -83,13 +84,21 @@ krikzz's hardware-validated Mega CD diagnostic, run on a real DE10-Nano. Build 5
 | PROG RAM, WORD RAM, WRAM PMOD | OK |
 | CDC REGS, CDC FLAGS | OK |
 | CDC DMA1, DMA2, DMA3 | OK |
-| CDC INIT | OK about half of runs, otherwise ERROR 03 |
+| CDC INIT | OK |
 | IRQ TEST | ERROR 0A |
 
-Build 51 produced a run in which every test passed, IRQ TEST included, so both remaining
-failures are margin rather than missing logic. [HANDOFF.md](HANDOFF.md) has the analysis of
-each, including why the sub-CPU's /VPA-terminated interrupt acknowledge is correct and must
-not be shortened to make IRQ 0A pass.
+CDC INIT used to fail 62% of runs and is now 0 in 34; the CDC frame timer was expiring 27 ns
+before each sector arrived, so sync insertion fired on every normal frame and woke the sub CPU
+to read a sector header that had not been latched yet.
+
+IRQ TEST 0A is the last one, and it is marginal rather than wrong.  Individual runs do pass it -
+builds 51 and 54 each produced a run where every single test was OK.  A 120-offset sweep of the
+sub-CPU's interrupt path (sim/cdc/irq) puts the response at 5411/6190/7097 ns against a 6779 ns
+deadline, with the gate array contributing nothing measurable: the whole spread is the 68000's
+own /VPA-terminated interrupt acknowledge, which takes 13-22 clocks depending on E-clock phase.
+That is what the real hardware does - Sega's gate-array pin list, Sega's factory checker and
+krikzz's own Mega CD core all say /VPA - so it is not something to shorten.
+[HANDOFF.md](HANDOFF.md) has the full analysis.
 
 # Testing a running MiSTer over SSH
 
