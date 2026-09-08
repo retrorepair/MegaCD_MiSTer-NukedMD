@@ -273,6 +273,7 @@ architecture rtl of ASIC is
 	signal INT_IPL 					: std_logic_vector(2 downto 0);
 	signal OLD_IEN1 					: std_logic;
 	signal OLD_IEN2 					: std_logic;
+	signal OLD_INT_ACK2 				: std_logic;
 	signal OLD_IEN4 					: std_logic;
 	signal OLD_IEN5 					: std_logic;
 	signal CDD_REC_OLD 				: std_logic;
@@ -573,13 +574,22 @@ begin
 			CFM <= (others => '0');
 			CC <= (others => (others => '0'));
 			INT_PEND(2) <= '0';
+			OLD_INT_ACK2 <= '0';
 			MAIN_CPU_CDC_READ <= '0';
-			
+
 		elsif rising_edge(CLK) then
 			MAIN_RST_EXEC <= '0';
 			
 			OLD_IEN2 <= IEN(2);
-			if INT_ACK(2) = '1' and INT_PEND(2) = '1' then
+			-- INT_ACK(2) is decoded combinationally from the sub-CPU's interrupt-acknowledge bus
+			-- cycle, so it stays high for the whole cycle - about 11 CLK edges.  Clearing on the
+			-- level meant that a fresh IFL2 write landing inside that window was swallowed on the
+			-- very next edge: the request set INT_PEND(2) for one cycle (its assignment comes later
+			-- in this process and so wins the tie) and the acknowledge then cleared it again, and
+			-- the sub CPU never saw that interrupt.  Acknowledge once, on the edge, so a request
+			-- that arrives after the acknowledge has begun survives it and is taken after the RTE.
+			OLD_INT_ACK2 <= INT_ACK(2);
+			if INT_ACK(2) = '1' and OLD_INT_ACK2 = '0' and INT_PEND(2) = '1' then
 				INT_PEND(2) <= '0';
 				IFL2 <= '0';
 			elsif IEN(2) = '0' and OLD_IEN2 = '1' and INT_PEND(2) = '1' then
