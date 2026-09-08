@@ -1719,3 +1719,47 @@ as the measurement, not casually.
 of the night - 47 runs, 46 byte-identical - but it carries the sync-insertion latch described
 above, so pausing CD-DA off a sector boundary can stop the decoder interrupt until software
 rewrites the CDC. Builds 51-56 in `releases/` are kept for the record, not for use.
+
+## IRQ 0A: closed for good. The SDRAM lever was measured and rejected
+
+The remaining idea was to give PRG-RAM priority over the cartridge and BIOS ports in
+`rtl/sdram.sv`, on the grounds that on a real Mega CD those are different memories that never
+contend. It was modelled properly - a scratch bench whose PRG-RAM model *is* the `sdram.sv`
+arbiter (7 clk_ram per transaction, `RFS_CNT = 766` refresh taken ahead of everything, the fixed
+priority chain, level requests with rising-edge capture, non-preemption), validated by
+reproducing the published baseline byte for byte with the arbiter disabled - and swept over 256
+offsets in six configurations against the 7170.4 ns deadline:
+
+| configuration | max | misses |
+|---|---|---|
+| always-ready PRG model (published baseline) | 7264.9 | 4/256 |
+| arbiter, refresh only | 7339.4 | 5/256 |
+| arbiter + cartridge contention | 7339.4 | 9/256 |
+| **+ PRG-RAM at the top of the chain** | **7432.6** | **11/256** |
+
+**It makes it worse, and the difference is noise anyway.** The control pair settles it: at a
+521 ns cartridge period the change reads 9 -> 11 (worse), at 500 ns it reads 8 -> 5 (better).
+Same change, opposite sign, only the cartridge phase differs; pooled 17/512 -> 16/512.
+
+The mechanism does work - it halves the wait-stated PRG reads, 2.46% -> 1.17% - and that is
+exactly why the result matters: **the misses are not the SDRAM.** Every miss in all six sweeps
+has an interrupt acknowledge of 13 sub clocks or more, and the /VPA IACK ranges 7-16 sub clocks
+= 561-1282 ns, a **721 ns spread from E-clock phase alone, 7.6x the ~95 ns gap**. In the
+always-ready sweep, where no PRG read takes a wait state at all, 4 offsets still miss by up to
+94.5 ns. **An infinitely fast PRG-RAM does not pass this test.**
+
+And the change is not free. The main CPU cannot be wait-stated on a cartridge or BIOS read -
+`cart_mem_busy` and `MCD_ROM_BUSY` reach data latches, not DTACK, and the FC1004's own DTACK
+fires unconditionally at ~121 ns - so a late SDRAM word is not a stall, it is **the wrong word on
+VD**, which is the build-4 black-screen failure mode. Worst-case BIOS latency would go 28 -> 35
+clk_ram (261 -> 326 ns) against roughly 186-196 ns of measured free margin, on the one path with
+no error signal, in a design already near -2 ns at 107 MHz.
+
+So: **rejected on measurement, not on nerves.** IRQ 0A misses because of the 68000's own
+E-synchronised /VPA acknowledge, our floor is the 68000's rather than the SDRAM's, and there is
+nothing further to do on our side. Anyone reopening this should read this section first.
+
+Two useful side results: a CDC DMA into PRG-RAM cannot starve the main CPU at any priority (it
+shares the one `PRSS` request pair and runs at ~10% of SDRAM bandwidth - one write per ~641 ns),
+and the IRQ bench's PRG-RAM model is pessimistic by ~28 ns per uncontended read but it does not
+matter, because both figures land inside the same sub-CPU clock.
