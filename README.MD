@@ -75,7 +75,7 @@ Place cartridge dump named cart.rom into game's folder
 
 The reference is [mcd-verificator](https://gendev.spritesmind.net/forum/viewtopic.php?t=3166),
 krikzz's hardware-validated Mega CD diagnostic, run on a real DE10-Nano.  Build 56, over
-12 consecutive runs that came back byte-identical:
+**32 consecutive runs whose result screens were byte-identical**:
 
 | test | result |
 |---|---|
