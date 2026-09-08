@@ -1763,3 +1763,56 @@ Two useful side results: a CDC DMA into PRG-RAM cannot starve the main CPU at an
 shares the one `PRSS` request pair and runs at ~10% of SDRAM bandwidth - one write per ~641 ns),
 and the IRQ bench's PRG-RAM model is pessimistic by ~28 ns per uncontended read but it does not
 matter, because both figures land inside the same sub-CPU clock.
+
+# ============================================================================
+# State of the core at the end of the 2026-09-08 session
+# ============================================================================
+
+Read this section alone if you read nothing else.
+
+## mcd-verificator
+
+Everything passes except `IRQ TEST 0A`. Build 56 ran 47 times, 46 byte-identical; the 47th
+passed everything. Five failures were closed in this session:
+
+| test | what it actually was |
+|---|---|
+| `VAR 02`, `REG 8030 07`, `IRQ 09` | not CDC bugs at all - the cartridge header was re-regioning the console to PAL, and all three are main-clock / sub-clock ratio measurements |
+| `CDC REGS 0B` | DBCH read back 8 bits instead of 4, and a word read of FF8006 returned a stale high byte |
+| `CDC FLAGS 32` | an unimplemented CDC register read back 0x00; two tests jointly pin it to 0xFF (open bus) |
+| `CDC INIT 03` | the CDC frame timer expired 27 ns before every sector arrived, so sync insertion fired on every normal frame and woke the sub CPU to read a header that had not been latched. 62% failure -> 0 in 69 runs |
+
+`IRQ TEST 0A` is understood completely and is not ours to fix: the deadline is 55 main clocks
+(7170.4 ns, measured with a gate-level main-CPU bench), our response is 5411/6262/7265 ns over
+256 offsets, 4 miss, and a 256-iteration run therefore passes 1.8% of the time against 1 in 34
+observed. The spread is the 68000's own /VPA-terminated interrupt acknowledge - 721 ns of
+E-clock phase, 7.6x the ~95 ns gap - and /VPA is confirmed correct for real hardware from Sega's
+gate-array pin list, Sega's factory checker, and krikzz's own Mega CD core. A perfect
+zero-latency PRG-RAM still misses. Nothing on our side is in the way.
+
+## Media handling
+
+All four OSD operations verified on hardware by what Main logs. Two real bugs fixed: a cartridge
+vanished on every disc change (Main re-sends the BIOS on every mount), and inserting a different
+game hot-swapped it into the previous game's BIOS and save file, because `same_game` was a
+directory-prefix match and most libraries are one flat folder. An adversarial review then caught
+two regressions in those very fixes - a sync-insertion latch that could stop the decoder
+interrupt for ever, and an auto-loaded `cart.rom` following you into the next game - both fixed.
+
+## Timing and resources
+
+`-1.550 @107 MHz (TNS -342)` at build 56, the best this configuration has had; one endpoint fails
+at 53.7 MHz by 0.34 ns. Every one of the worst 25 paths is inside a die-derived model. SEED 4 is
+kept - SEED 6 closes the 53.7 MHz path and costs the 107 MHz clock three times over.
+
+The binding resource is **M10K block count**: 519 of 553 for 73% of the bits. That is what a
+combined 32X core has to live inside, and what makes the die-level models the expensive choice.
+
+## Where the leverage was
+
+Almost none of tonight's progress came from staring at RTL. It came from being able to measure:
+driving the OSD over SSH with a virtual keyboard, running the diagnostic 100+ times and grouping
+the results by md5, getting MiSTer's log to actually flush, building Main from source in a
+minute, and putting benches on the two 68000s. Three of the five closed failures were diagnosed
+before a line of RTL changed, and the two regressions were caught by asking someone to attack the
+work rather than confirm it.
