@@ -1910,3 +1910,16 @@ RAM cartridge's own windows (already `~rom_mode`-gated) may drive.
 This also explains why it looked verified earlier in the session: with a cartridge inserted the
 machine boots the cartridge either way, and Alien 3's own Sega licence screen looks like the
 Mega CD BIOS start-up at a glance.
+
+### The IRQ 0A pass rate is build-dependent
+
+| build | full passes |
+|---|---|
+| 56 | 1 / 47 (2%) |
+| 58 | 0 / 14 |
+| 59 | 3 / 13 (23%) |
+
+Same RTL in 58 and 59 apart from the menumask instrumentation, so this is placement, not logic -
+which is exactly what the E-phase model predicts, because the sub-CPU clock is an enable derived
+from a fractional divider and its alignment to the main CPU's loop shifts with timing. Do not read
+a good run as a fix, and do not read a build's rate as a property of the RTL.
