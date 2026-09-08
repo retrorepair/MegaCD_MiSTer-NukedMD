@@ -1490,12 +1490,12 @@ Next places to look, if anyone returns to this: the derivation of the 52-main-cl
 itself (its bus-ordering assumption is worth +-4 clocks, i.e. +-520 ns, which is the whole
 argument), and the main-side A12000 write to `INT_PEND(2)` path, which is outside this bench.
 
-## Build 54 on hardware (10 runs): CDC INIT 03 is fixed
+## Build 54 on hardware (22 runs): CDC INIT 03 is fixed
 
-| test | build 52 (24 runs) | build 54 (10 runs) |
+| test | build 52 (24 runs) | build 54 (22 runs) |
 |---|---|---|
-| `CDC INIT 03` | 15/24 (62%) | **0/10** |
-| `IRQ TEST 0A` | 24/24 | 9/10 - run 4 was a **full pass**, IRQ TEST included |
+| `CDC INIT 03` | 15/24 (62%) | **0/22** |
+| `IRQ TEST 0A` | 24/24 | 21/22 - one run was a **full pass**, IRQ TEST included |
 
 The sync-insertion guard did what the diagnosis said it would. Build 54 also carries the
 cartridge-persistence fix, the Disc Insert restructure and the edge-acknowledged INT2.
