@@ -1816,3 +1816,51 @@ the results by md5, getting MiSTer's log to actually flush, building Main from s
 minute, and putting benches on the two 68000s. Three of the five closed failures were diagnosed
 before a line of RTL changed, and the two regressions were caught by asking someone to attack the
 work rather than confirm it.
+
+# CORRECTION: "Remove Cartridge & Reset" does NOT work, and I said earlier that it did
+
+I reported this verified. It is not. The screenshot I read as the Mega CD BIOS was **Alien 3's
+own Sega licence screen** - a starfield with "ALL RIGHTS RESERVED", which is what the Mega CD
+BIOS start-up also looks like at a glance. Waiting longer shows the ALIEN 3 title and then
+attract-mode gameplay. The user's original report was right.
+
+It fails on **every** build tested, including build 51 with the pre-session logic, so it is not a
+regression from this session's cartridge changes - it is the pre-existing bug that was reported.
+
+## What is established, with evidence
+
+| step | evidence |
+|---|---|
+| the OSD item selected really is `R[37]` | Main traced: `RTRACE bit=37 ex=0 opt=[37],Rem` for 3 UP presses (2 UP gives bit=38, 4 UP gives bit=0) |
+| Main transmits bit 37 correctly | `STRACE set [37:37]=1 -> cur_status[4]=20`, then `=0 -> cur_status[4]=00`. Byte 4 bit 5 is status bit 37, and `user_io_status_set` sends the whole `cur_status` with UIO_SET_STATUS2 |
+| `hps_io` delivers it | `sys/hps_io.sv:471-478` writes all 128 bits; word 2 (bytes 4-5) lands in `status[47:32]` |
+| the core acts on it | `MCD: request to reset` appears in the log **immediately after** the STRACE pair - the core dropped `MCD_RST_N` and sent CDD 0xFF |
+| the machine really does reset | after `R[37]` the cartridge game restarts from its boot sequence (title screen ~15 s later), it does not continue |
+| **but the cartridge is still mapped** | it boots the cartridge again, not the Mega CD BIOS |
+| the clearing path itself works | on build 51, `R[0]` (which also cleared `rom_cart_mode`, via `host_reset` and the BIOS reload) **does** come up on the Mega CD BIOS - confirmed by screenshot |
+
+So `cart_remove` asserts, `reset` fires from it, and `rom_cart_mode <= 0` is driven by that same
+wire in the same process - yet the machine comes back with the cartridge mapped.
+
+## Where to look next
+
+The unexplained step is between `rom_cart_mode` and the address map. `/CART` reaches the FC1004
+combinationally - `MegaCD.sv:595` `.ext_cart(~rom_cart_mode)` -> `md_board.v:929` `assign CART =
+ext_cart` -> `ym6045.v:676` `assign va22_cart = ~(va22_in ^ CART)` - and `va22_cart` gates both
+`CE0` (`ym6045.v:659-660`) and `ROM` (`ym6045.v:678-679`), so a change should take effect at once
+with no latching at reset. Candidates, in the order I would try them:
+
+1. Put `rom_cart_mode` on the spare `status_menumask` bit (`MegaCD.sv:231` has `1'b0` at bit 1)
+   and print `hdmask` from Main. That answers "does the register actually clear" in one build,
+   which is the fork in the road - everything above is consistent with it clearing OR not.
+2. If it does clear, the fault is downstream: work out what `CE0`/`ROM` do at address 0 for both
+   polarities of `CART`, and check `mcd_cart`'s own decode (`MegaCD.sv:948` `.rom_mode(...)`) and
+   whether it still drives the bus.
+3. If it does not clear, the fault is the pulse: `cart_remove` is a bare level off `status[37]`
+   with no edge detect, sampled in `clk_sys` - check it is not being lost against the reset it
+   causes.
+
+`R[0]` "Reset & Eject CD" remains a working way to get back to the Mega CD BIOS, on builds up to
+56. Note that on build 58 `R[0]` deliberately no longer clears a manually inserted cartridge, so
+**on build 58 there is currently no working way to remove one** - which makes fixing `R[37]` the
+top open item, ahead of anything else in this file.
