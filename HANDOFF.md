@@ -1387,3 +1387,16 @@ Sync insertion means "no sync pattern found", so its timeout must be *longer* th
 arriving sector, not 27 ns shorter. Making the two rates consistent (or the timeout properly
 later) is the fix; it is not yet made, because the two constants are region-selected and the
 change wants a bench before a build.
+
+## Build 52 on hardware (6 runs, no F2 needed)
+
+The region fix does its job: `VAR TESTS`, `REG 8030`, `CDC REGS` and `CDC FLAGS` are all OK
+straight off a normal load, with no force-US hotkey.
+
+| runs | result |
+|---|---|
+| 3/6 | everything OK except `IRQ TEST 0A` |
+| 3/6 | `IRQ TEST 0A` + `CDC INIT 03` |
+
+Timing improved too: **-1.694 @107 MHz (TNS -664)**, up from -2.141 (TNS -889) in build 51,
+and +0.121 @53.7 MHz.
