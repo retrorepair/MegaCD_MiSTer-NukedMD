@@ -1565,3 +1565,27 @@ input, not a fault - the virtual keyboard is not mapped to a joypad on this mach
 cannot be synthesised. If a future session wants to drive games, the uinput device would have
 to present itself as a joystick that MiSTer already knows, or a keyboard map would have to be
 written into config/inputs.
+
+### One inference worth recording before anyone reopens IRQ 0A
+
+The bench says 9 of 120 E-clock phases miss (7.5%). Hardware says the test fails in roughly 33
+of 34 runs. Those two only reconcile if the effective deadline is **lower** than the nominal
+6779 ns - low enough that most of our 5411..7097 ns distribution is over it - or if the real
+latency is higher than the bench's.
+
+Both are plausible and both point the same way:
+
+- The 52-main-clock deadline rests on an assumption about where the read and write bus cycles
+  sit inside their instructions, worth +-4 clocks = +-520 ns. 48 clocks would put it at 6258 ns,
+  and then most phases miss.
+- The bench drives the arming write directly on the EXT bus, so it excludes the main 68000 ->
+  md_board -> MegaCD.sv buffer path (about 47 ns) and models the sub CPU as sitting in the
+  dispatcher's idle loop. In the real test each iteration is preceded by an `mcdRD8(0)` mailbox
+  round trip, so the sub may still be in the dispatcher's exit path rather than the spin loop
+  when IFL2 arrives, which would make the interrupted-instruction term longer than the 16-28
+  clocks measured.
+
+So the gap is probably larger than the 320 ns the bench suggests, not smaller - which makes the
+conclusion stronger, not weaker: it is not reachable by shaving the gate array, and the honest
+next step is to pin the deadline exactly (single-step the main CPU's 6-NOP window in a bench
+that models both CPUs) rather than to optimise against a number with 520 ns of slop in it.
