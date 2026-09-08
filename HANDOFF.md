@@ -1293,3 +1293,97 @@ loses keys. `tools/mister/osd.py` holds the OSD selection indices derived from M
 note the OSD is composited after the scaler, so it can never appear in a screenshot and must be
 driven blind; the bottom four items are reachable with 1-4 UP presses because the selection wraps.
 `tools/mister/verif_loop.sh` runs the verificator N times and md5-groups the result screens.
+
+## The four media operations, verified on hardware
+
+Driven blind through the OSD with `tools/mister/uinput_kbd.py`, each identified by what Main
+logged. The selection wraps, so counting UP from a freshly-opened menu is immune to how many
+optional rows sit above:
+
+| UP presses | item | Main logged |
+|---|---|---|
+| 1 | Exit | (nothing) |
+| 2 | **Eject Disc** (R[38]) | `MCD: eject - tray open, core left running` |
+| 3 | **Remove Cartridge & Reset** (R[37]) | `MCD: request to reset`, PLL recalculated |
+| 4 | **Reset & Eject CD** (R[0]) | `Eject image from 0 slot`, BIOS re-sent |
+| 5 | Pause When OSD is Open | (a toggle, nothing logged) |
+
+Screenshots confirm the effects: with the cartridge MGL loaded the machine boots Alien 3, and
+18 s after "Remove Cartridge & Reset" it is sitting on the Mega CD BIOS starfield instead.
+
+**All four work.** What made them look broken was two things that had nothing to do with the
+options themselves:
+
+1. **stdout buffering.** MiSTer's log is block-buffered when redirected to a file, so the one
+   or two lines an eject or a mount writes sat in libc's buffer, invisible, until unrelated
+   output pushed them out - which reads exactly like the keypress never arrived. Fixed in the
+   fork with `setvbuf(stdout, NULL, _IOLBF, 0)`. I lost time to this; check it first next time
+   a MiSTer action "does nothing".
+2. **`Disc Insert: Keep Running` masked `status[0]`**, so while it was on the OSD
+   "Reset & Eject CD" really did nothing. That option now lives in Main (see below).
+
+Two real bugs did come out of the investigation, both fixed:
+
+- **A cartridge vanished on every disc change.** `rom_cart_mode` was cleared by a BIOS reload,
+  and Main re-sends the BIOS on every image mount. A cartridge is physical; it now clears only
+  on the explicit OSD removal.
+- **Inserting a different game hot-swapped it into the previous game's BIOS and save.** Main's
+  `mcd_set_image()` decides "same game" by directory prefix, which is right for a multi-disc
+  game in its own folder and wrong for a flat folder of unrelated titles - there every game
+  matches every other, so no reset, no BIOS reload, wrong save. The fork gates that test on
+  the core's `status[36]`, so the default restarts on every disc change and "Keep Running" is
+  opt-in for multi-disc swapping.
+
+## IRQ 0A: /VPA is correct and must stay
+
+Our sub-CPU interrupt acknowledge is terminated with /VPA (`ASIC.vhd:2576-2591`), which makes
+the 68000 run its 6800-style E-synchronised autovector cycle - 10 to 19 clocks instead of the
+4 the MC68000UM's "Interrupt 44(5/3)" assumes. That is **what the real hardware does**, on
+several independent lines of evidence:
+
+- Sega's own maintenance manual pin list for the Mega CD gate array **315-5548 (MCE2,
+  MB634120)** gives pin 126 as an *output* VPA, alongside outputs IPL0/1/2 and inputs FC0/FC1,
+  and the part has **no VMA and no E pin** - so its VPA output can only exist to autovector
+  the interrupt acknowledge (`docs/MCD_MaintenanceManual_Export_RevA.pdf`, section 7-2).
+- Sega's factory checker (610-0276) has the error code **"206 VPA SIGNAL ERROR (LEVEL 2
+  INTERRUPT)"** - VPA has no role in a level-2 interrupt unless it terminates the IACK.
+- **krikzz's own Mega CD FPGA core** - by the author of mcd-verificator - does the same:
+  `cpu_vpa <= !cpu_space` with `cpu_space = !cpu_oe & cpu_fc[1:0] == 2'b11`.
+- Genesis Plus GX charges 50-59 clocks E-phase dependent; jgenesis charges a constant 54 and
+  passes every verificator test; ares charges +10 to +18.
+
+So passing IRQ 0A does not require a 4-clock IACK, and shortening ours would be a fake.
+The budget is 52 main clocks = 6779 ns (NTSC) from the arming write at A12000 to the read of
+A12026, against roughly 16 (finish the idle-loop CMPI) + 50..59 (exception) + 12 (the ISR's
+write) = 78..87 sub clocks = 6.24..6.96 us. Real hardware is itself marginal here, which is
+why the subtest flips between OK and 0A rather than always failing. Our own additions measure
+about 1.5 sub clocks, so the remaining work is to find the wait states that tip it, not to
+change the acknowledge.
+
+Worth noting from jgenesis: their IRQ 09 turned out to be a **main-CPU** speed problem, fixed
+by modelling DRAM refresh as stalling the main CPU while it executes out of Sega CD BIOS ROM.
+
+## CDC INIT 03: the sync-insertion interrupt beats the real sector, permanently
+
+Subtest 03 (test function ROM 0x011FEC, check at 0x0120F0) plays from MSF 00:01:73 and then,
+up to 200 times, waits for a CDC decoder interrupt and requires HEAD0..3 to read exactly
+`00 02 00 01` - the header of LBA 0. LBA 0 passes **once**, so any decoder interrupt whose
+header read misses it or tears across the LBA 0/LBA 1 boundary loses the test outright.
+
+There are two sources of that interrupt, and ours are 27 ns apart in the wrong order:
+
+- the CDC's own frame timer, `FRAME_END+1 = 715909` clocks at 53.693175 MHz = **13.333333 ms**
+  exactly 75.000000 Hz (`CDC.vhd:466`), which fires `DEC_FRAME` -> sync insertion; and
+- the drive's sector stream, handed over every `166667` ticks of the 12.5 MHz enable
+  (`ASIC.vhd:942`) = **13.333360 ms**, i.e. 74.99985 Hz.
+
+`FRAME_CNT` is reset by `SECTOR_END`, so each frame restarts together and the CDC timer expires
+26.7 ns *before* the sector arrives, every frame. Sync insertion therefore fires on every normal
+frame - and `HEAD0..3` is only latched at the end of the sector burst (`CDC.vhd:439-448`), so
+the CPU is woken before the header it is about to read exists. Whether it reads the old header,
+a torn one, or the right one depends on HPS jitter. That is the shape of the intermittency.
+
+Sync insertion means "no sync pattern found", so its timeout must be *longer* than a normally
+arriving sector, not 27 ns shorter. Making the two rates consistent (or the timeout properly
+later) is the fix; it is not yet made, because the two constants are region-selected and the
+change wants a bench before a build.
