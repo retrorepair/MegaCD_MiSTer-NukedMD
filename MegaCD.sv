@@ -420,6 +420,7 @@ reg [15:1] ram_rst_a;
 always @(posedge clk_md) begin
 	reg [4:0] cnt = 0;
 	reg old_reset = 0;
+	reg old_cart_remove = 0;
 
 	ram_rst_a <= ram_rst_a + 1'd1;
 	if(&ram_rst_a & ~&cnt) cnt <= cnt + 1'd1;
@@ -429,8 +430,20 @@ always @(posedge clk_md) begin
 
 	s_reset <= (cnt < 3);
 
-	if(loading)       md_reset <= 1;
-	else if(cnt == 3) md_reset <= 0;
+	// "Remove Cartridge & Reset" must be a full power cycle, not a warm reset.  A cartridge
+	// cannot be hot-removed on real hardware, so removal is a power-on: the whole Mega CD - the
+	// FC1004 gate array (SRES), the VDP, both 68000s - resets together in the cold-boot order
+	// (MCD up first, main CPU released after).  cart_remove used to assert only btn_reset, which
+	// gives the main 68000 a ~17 us warm pulse via the FC1004 WRES pin but leaves SRES low: the
+	// VDP was never reset (it kept the cartridge's last frame), the gate-array decode latches kept
+	// cartridge-era state, and the CPU restarted before the MCD was up - so with rom_cart_mode
+	// already cleared to 0 the machine still failed to boot the BIOS (confirmed on hardware:
+	// cartmode=0, BIOS resident, yet a frozen Alien 3 frame and no drive polling).  Driving
+	// md_reset - what a cold boot / BIOS download does through `loading` - gives SRES and the
+	// right ordering, so removal lands on the Mega CD BIOS.
+	old_cart_remove <= cart_remove;
+	if(loading | (~old_cart_remove & cart_remove)) md_reset <= 1;
+	else if(cnt == 3)                              md_reset <= 0;
 
 	if(~old_reset & reset) btn_reset <= 1;
 	else if(&cnt)          btn_reset <= 0;
