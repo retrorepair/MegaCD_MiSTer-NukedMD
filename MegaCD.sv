@@ -415,7 +415,6 @@ reg [15:1] ram_rst_a;
 always @(posedge clk_md) begin
 	reg [4:0] cnt = 0;
 	reg old_reset = 0;
-	reg old_cart_remove = 0;
 
 	ram_rst_a <= ram_rst_a + 1'd1;
 	if(&ram_rst_a & ~&cnt) cnt <= cnt + 1'd1;
@@ -425,20 +424,20 @@ always @(posedge clk_md) begin
 
 	s_reset <= (cnt < 3);
 
-	// "Remove Cartridge & Reset" must be a full power cycle, not a warm reset.  A cartridge
-	// cannot be hot-removed on real hardware, so removal is a power-on: the whole Mega CD - the
-	// FC1004 gate array (SRES), the VDP, both 68000s - resets together in the cold-boot order
-	// (MCD up first, main CPU released after).  cart_remove used to assert only btn_reset, which
-	// gives the main 68000 a ~17 us warm pulse via the FC1004 WRES pin but leaves SRES low: the
-	// VDP was never reset (it kept the cartridge's last frame), the gate-array decode latches kept
-	// cartridge-era state, and the CPU restarted before the MCD was up - so with rom_cart_mode
-	// already cleared to 0 the machine still failed to boot the BIOS (confirmed on hardware:
-	// cartmode=0, BIOS resident, yet a frozen Alien 3 frame and no drive polling).  Driving
-	// md_reset - what a cold boot / BIOS download does through `loading` - gives SRES and the
-	// right ordering, so removal lands on the Mega CD BIOS.
-	old_cart_remove <= cart_remove;
-	if(loading | (~old_cart_remove & cart_remove)) md_reset <= 1;
-	else if(cnt == 3)                              md_reset <= 0;
+	// Every reset source drives the FULL reset (md_reset), not just btn_reset.  On the Mega CD a
+	// reset must reset the whole machine together - the FC1004 gate array (SRES), the VDP, and
+	// both 68000s - in the cold-boot order (MCD up first, main CPU released after), because a
+	// cartridge cannot be hot-removed and the reset button on real hardware power-resets both the
+	// console and the CD unit.  btn_reset alone gives the main 68000 only a ~17 us warm pulse via
+	// the FC1004 WRES pin and leaves SRES low: the VDP keeps its last frame, the gate-array decode
+	// latches keep stale state, and the CPU restarts before the MCD is up.  Confirmed on hardware:
+	// a warm-only reset FROZE both "Remove Cartridge & Reset" (stale Alien 3 frame, no drive poll)
+	// and the standalone "Reset" (Cobra frozen mid-FMV).  Driving md_reset - exactly what a cold
+	// boot / BIOS download does through `loading` - gives SRES and the right ordering, so any reset
+	// (R[1] Reset, R[37] Remove Cartridge, R[0]-part host_reset, the user button, a region change)
+	// lands cleanly on the BIOS.
+	if(loading | (~old_reset & reset)) md_reset <= 1;
+	else if(cnt == 3)                  md_reset <= 0;
 
 	if(~old_reset & reset) btn_reset <= 1;
 	else if(&cnt)          btn_reset <= 0;
