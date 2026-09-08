@@ -1659,3 +1659,56 @@ Left alone, with reasons: DBCH's top nibble now reads 0 rather than the upstream
 requires 0, so the mask stays, but `DBC(15 downto 12)` is now written and never read and could
 go. And `region_req` (`MegaCD.sv`) still has no initialiser, so it powers up JP if a core ever
 runs without a BIOS being sent.
+
+## IRQ 0A is now fully explained, and the deadline was wrong by 3 clocks
+
+A gate-level bench of the MAIN 68000 (`sim/main68k/`, the same `m68kcpu` `md_board.v` uses, on an
+md_board-shaped bus) measured the window instead of assuming it. Nine instructions reproduce
+their MC68000UM timings exactly, and the S-state alignment is verified at MCLK2 resolution.
+
+**The 52-clock bus-cycle interval was exactly right** - end of the arming write cycle to start of
+the A12026 read cycle is 4 + 24 + 20 + 4 = 52 clocks = 6779.3 ns, and the +-4 clocks of
+uncertainty collapses to zero. **But that is not the deadline the gate array sees:**
+
+- it registers the arming write at **S4** (`ASIC.vhd:615`; `M68K_GA_SEL` needs a data strobe and
+  on a write /UDS asserts in S4, two clocks before the cycle ends), and
+- it snapshots the answer at **S2** of the read (`M68K_REG_DO <= CS(3)`, `ASIC.vhd:757` - one
+  clock after that cycle starts, not at the CPU's data latch in S6/S7).
+
+**Deadline = 55 main clocks = 7170.4 ns**, measured end to end through that port. It is robust:
+both endpoints are register edges, so any wait state anywhere only lengthens it.
+
+The second error was in the other direction: **the 120-offset sweep was too short.** Latency does
+not repeat at lcm(26 sub-clock spin, 10-clock E period) = 130, because the sub clock is itself a
+fractional enable (`ASIC.vhd:312-319`, measured 12.483 MHz), so 37 of 40 offsets differ from
+offset+130. Over 256 offsets the distribution is 5411.4 / 6262.4 / **7264.9** ns.
+
+| deadline | misses | per-iteration p | P(a 256-iteration run passes) |
+|---|---|---|---|
+| 6779 ns (assumed) | 34/256 | 13.3% | 1.4e-16 - could never pass |
+| **7170.4 ns (measured)** | **4/256** | **1.56%** | **1.8%, about 1 run in 56** |
+| observed on hardware | - | 1.37% | 2.9%, 1 run in 34 |
+
+**Those reconcile.** 1.8% predicted against 1 in 34 observed, with 4 events in 256 offsets - the
+model needs no further mechanism, and the earlier 7.5%-versus-33-of-34 tension was simply two
+errors pointing opposite ways.
+
+The "the sub is still in the dispatcher exit path" hypothesis is **refuted by measurement**: IFL2
+arrives 164.6-193.9 sub clocks after STA_BSY clears, i.e. in the 6th to 8th iteration of the
+26-clock idle spin, never the exit path, and the 29.3-clock spread exceeds the loop period so the
+phase is uniform - which is exactly what the offset sweep models.
+
+### What would actually close it
+
+The gap is now **~95 ns**, not the ~320 ns I estimated from the wrong deadline. And there is one
+untested term left, which is a genuine accuracy deviation rather than a micro-optimisation: the
+bench's PRG-RAM never stalls, but on the DE10-Nano PRG-RAM shares one SDRAM with the cartridge
+slot the main CPU prefetches from every 4 CPU clocks (`MegaCD.sv:995` cart vs `:1013` PRG-RAM,
+priority in `rtl/sdram.sv:147-201`). On a real Mega CD, PRG-RAM is dedicated DRAM inside the CD
+unit and the cartridge is on the console bus; they never contend. One SDRAM transaction is 65 ns
+and refresh is another 65, so that contention is worth up to ~130 ns of sub-CPU latency - the
+right order to matter, and removing it moves us toward the hardware rather than away.
+
+It is also a change to the most timing-critical shared module in the design, and it is zero-sum
+in bandwidth: the main CPU would wait instead. Worth doing carefully, with the 256-offset sweep
+as the measurement, not casually.

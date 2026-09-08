@@ -76,6 +76,14 @@ module tb_mcd_irq2;
    );
 
    // ---------------- main-side EXT bus tasks (A120xx gate-array) ----------------
+   // mcd-verificator IRQ TEST 0A deadline, MEASURED (not assumed) in sim/main68k:
+   // 55 main-CPU clocks at 7.670454 MHz between the gate array's own two events -
+   // INT_PEND(2) <= '1' at S4 of the arming write to $A12000, and
+   // M68K_REG_DO <= CS(3) at S2 of the read of $A12026 (ASIC.vhd:561, 615-616, 757).
+   // The old 6779 ns figure was the gap between the two *bus cycles*, which is
+   // exactly 52 clocks but is 3 clocks short of the interval that actually matters.
+   localparam real DEADLINE_NS = 55.0 * 130.3707;   // 7170.4 ns  (was 6779.0)
+
    localparam int TO=200000;
    real t_ext_end = 0.0;
    task automatic ext_wr(input int addr, input [15:0] val, input bit uds, input bit lds);
@@ -320,7 +328,7 @@ module tb_mcd_irq2;
    always @(posedge MCLK) if(DBG_S68K_AS_N==1'b0 && DBG_S68K_A!==a_last) begin a_last<=DBG_S68K_A; sub_cycles++; end
 
    int off, i; bit ok;
-   real tot_req_a [0:255], tot_ext_a [0:255], tot_cs3_a [0:255]; int iack_a [0:255]; int ncyc_a [0:255];
+   real tot_req_a [0:1023], tot_ext_a [0:1023], tot_cs3_a [0:1023]; int iack_a [0:1023]; int ncyc_a [0:1023];  // NOFF > 256 used to overflow these
    real mn, mx, sum; int imn, imx, nmiss;
    int NOFF = 13;
    string bname [0:4] = '{"PRG read ","PRG write","REG read ","REG write","VPA/IACK"};
@@ -364,14 +372,14 @@ module tb_mcd_irq2;
       mn=1e30; mx=-1e30; imn=0; imx=0; sum=0.0; nmiss=0;
       for (i=0;i<NOFF;i++) begin
          $display("  %3d  cycles=%0d  IACK=%0d  to_CS3=%0.1f  to_ASrise=%0.1f  %s", i, ncyc_a[i], iack_a[i], tot_cs3_a[i], tot_req_a[i],
-                  (tot_cs3_a[i] <= 6779.0) ? "UNDER" : "OVER");
+                  (tot_cs3_a[i] <= DEADLINE_NS) ? "UNDER" : "OVER");
          if (tot_cs3_a[i] < mn) begin mn=tot_cs3_a[i]; imn=i; end
          if (tot_cs3_a[i] > mx) begin mx=tot_cs3_a[i]; imx=i; end
          sum = sum + tot_cs3_a[i];
-         if (tot_cs3_a[i] > 6779.0) nmiss++;
+         if (tot_cs3_a[i] > DEADLINE_NS) nmiss++;
       end
-      $display("  INT_PEND(2) rise -> CS(3):=2 load :  min=%0.1f (off=%0d)  mean=%0.1f  max=%0.1f (off=%0d)  deadline=6779  MISSES=%0d/%0d (%0.1f%%)",
-               mn, imn, sum/NOFF, mx, imx, nmiss, NOFF, 100.0*nmiss/NOFF);
+      $display("  INT_PEND(2) rise -> CS(3):=2 load :  min=%0.1f (off=%0d)  mean=%0.1f  max=%0.1f (off=%0d)  deadline=%0.1f  MISSES=%0d/%0d (%0.1f%%)",
+               mn, imn, sum/NOFF, mx, imx, DEADLINE_NS, nmiss, NOFF, 100.0*nmiss/NOFF);
       $display("");
       $display("======== BUS-CYCLE TIMING BREAKDOWN (all %0d offsets) ========", NOFF);
       $display("  type        n     AS->DS (min/mean/max)      DS->term (min/mean/max)     AS->term (min/mean/max)   RDY=0@DS  PRSS/=IDLE@DS");
