@@ -271,3 +271,24 @@ md5 795743d7 (releases/MegaCD_TEST_NukedMD_b56_20260908.rbf).
 SEED 6 closes the single SDRAM->ASIC path on 53.7 MHz but pays for it three times over on the
 107 MHz clock, which is the dominant one and the one carrying the die-derived models. SEED 4 is
 kept. Recorded so nobody re-runs this experiment.
+
+## Build 58 (2026-09-08) — the regression fixes; note the Quartus crash
+
+Build 56's RTL plus the two fixes an adversarial review found (the sync-insertion guard now
+expires after one frame; an auto-loaded `cart.rom` is tracked separately from an OSD-inserted
+cartridge). SEED 4.
+
+Timing (slow 85C): **-2.068 @107 MHz (TNS -1070)**, **+0.033 @53.7 MHz**, **+0.290 HDMI PLL**.
+
+So the two smaller clocks both go positive for the first time in this configuration, and the
+107 MHz clock gives some back. Build 56 was -1.550 / -0.340 / -0.095. As ever at a fixed seed,
+the spread between builds exceeds the RTL delta between them.
+
+**`quartus_sta` crashed during this compile** — `*** Fatal Error: Access Violation`, stack
+`sta_find_duplicates_of_deleted_net_name` → `add_keeper_to_vector_if_wildcard_matches`. A Quartus
+17.0.2 Lite bug, not a design problem: Analysis & Synthesis, the Fitter and the Assembler had all
+already reported success and `output_files/MegaCD.rbf` was written. Re-running
+`quartus_sta MegaCD` on its own completed with 0 errors and produced the numbers above. If a
+compile ends with no timing summary, check for that stack before assuming the build failed.
+
+md5 72acf1a7.
