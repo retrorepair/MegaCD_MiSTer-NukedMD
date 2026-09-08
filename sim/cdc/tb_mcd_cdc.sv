@@ -22,8 +22,15 @@ module tb_mcd_cdc;
    logic MCLK=0; always #4.657 MCLK=~MCLK;   // 107.386 MHz
    logic CLK =0; always #9.313 CLK =~CLK;    // 53.693 MHz
    logic RST_N=0, ENABLE=1'b1;
+   // The 50 MHz Mega CD enable must be generated in the CLK domain, because that is the domain
+   // the ASIC samples it in (ASIC.vhd:308-318) and it is what the core does (MegaCD.sv:812-820,
+   // CEGen on clk_sys, IN 53693175 / OUT 50000000).  Generating it on MCLK makes each pulse one
+   // MCLK wide, and CLK's edges here sit exactly midway between MCLK's, so HALF the pulses are
+   // never seen: the sub CPU then runs at 6.28 MHz instead of 12.5 and every latency measured
+   // through this bench comes out about twice too long.  Any IRQ figure taken from this bench
+   // before 2026-09-08 was inflated that way.
    logic EN50=0; integer acc=0;
-   always @(posedge MCLK) begin EN50<=1'b0; acc=acc+50000000; if(acc>=107386350) begin acc=acc-107386350; EN50<=1'b1; end end
+   always @(posedge CLK) begin EN50<=1'b0; acc=acc+50000000; if(acc>=53693175) begin acc=acc-53693175; EN50<=1'b1; end end
 
    logic [17:1] EXT_VA='0; logic [15:0] EXT_VDI='0; wire [15:0] EXT_VDO;
    logic EXT_AS_N=1'b1,EXT_RNW=1'b1,EXT_LDS_N=1'b1,EXT_UDS_N=1'b1; wire EXT_DTACK_N;

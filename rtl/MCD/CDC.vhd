@@ -355,10 +355,24 @@ begin
 			DEC_WR <= '0';
 			SECTOR_END <= '0';
 			-- frame timer: decoder interrupt without drive data (sync insertion), flag release, decoder off
+			--
+			-- Sync insertion stands in for a sector that did not arrive, so it must not pre-empt one
+			-- that is arriving.  It was doing exactly that on every single frame: SECTOR_END restarts
+			-- FRAME_CNT, and the frame timer is 715909 CLK = 13.333333 ms (exactly 75.000000 Hz) while
+			-- the drive hands over a sector every 166667 ticks of the 12.5 MHz enable = 13.333360 ms
+			-- and then takes ~200 us to stream 2352 bytes.  So DEC_FRAME always fired first, and
+			-- because HEAD0..3 are only latched at the last word of the burst below, the sub CPU was
+			-- woken to read a header that did not exist yet - it got the previous sector's, or a torn
+			-- pair.  mcd-verificator's CDC INIT sub-test 03 has exactly one chance to catch LBA 0's
+			-- header, which is why it failed intermittently.
+			--
+			-- WORD_CNT is non-zero only between the first word of a sector and its last, so gating on
+			-- it says "a sector is being decoded, do not insert a sync".  With no disc nothing streams,
+			-- WORD_CNT stays 0, and the free-running 75 Hz interrupt continues as before.
 			if CTRL0(DECEN) = '0' then
 				IFSTAT(DECI) <= '1';
 				STAT3(VALST) <= '1';
-			elsif DEC_FRAME = '1' and CTRL1(SYIEN) = '1' then
+			elsif DEC_FRAME = '1' and CTRL1(SYIEN) = '1' and WORD_CNT = 0 then
 				IFSTAT(DECI) <= '0';
 				STAT3(VALST) <= '0';
 			elsif DEC_MID = '1' then
