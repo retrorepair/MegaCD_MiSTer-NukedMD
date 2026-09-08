@@ -120,8 +120,8 @@ krikzz's own Mega CD core all say /VPA - so it is not something to shorten.
 # Main_MiSTer
 
 This core expects a patched Main; `releases/main_mister/` has the binary and
-[retrorepair/Main_MiSTer](https://github.com/retrorepair/Main_MiSTer) branch `megacd-nukedmd`
-has the source. Every patch is `is_megacd()`-guarded:
+[retrorepair/Main_MiSTer](https://github.com/retrorepair/Main_MiSTer) has the source - its `master`
+carries the patches, so a plain clone builds the patched Main. Every patch is `is_megacd()`-guarded:
 
 - CDD seek latency matched to Genesis Plus GX, so Thunder Storm FX and the other Wolf Team
   titles boot instead of freezing on the Sega logo;

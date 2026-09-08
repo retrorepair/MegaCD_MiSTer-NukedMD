@@ -2,7 +2,8 @@
 
 `MiSTer` here is MiSTer-devel/Main_MiSTer with five MegaCD patches, all guarded by
 `is_megacd()` except the last, which is core-independent. Source:
-[retrorepair/Main_MiSTer](https://github.com/retrorepair/Main_MiSTer), branch `megacd-nukedmd`.
+[retrorepair/Main_MiSTer](https://github.com/retrorepair/Main_MiSTer) - `master` carries the patches
+(and `megacd-nukedmd` is the same commit), so a plain clone builds the patched Main.
 
 1. **CDD seek latency** — the Genesis Plus GX drive-latency floor for Play/Seek (at least 12 CDD
    interrupts). Thunder Storm FX and the other Wolf Team titles boot instead of freezing on the
