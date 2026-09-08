@@ -1597,7 +1597,13 @@ always @(posedge clk_sys) begin
 		endcase
 	end
 
-	if(ioctl_wr & rom_download) begin
+	// The console's video standard comes from the BIOS, not from whatever sits in the cartridge
+	// slot: a US Mega CD stays NTSC with a European cart plugged in.  So sniff bios_download only.
+	// (rom_download used to mean "the BIOS"; it grew to cover cartridges when the cart slot was
+	// added, which let a cart header re-region the machine.  mcd-verificator.bin carries 'W' at
+	// $1F0, so loading it as a cart forced EU/PAL and ran the main 68000 0.912% slow - exactly
+	// what the VAR 02 / REG 8030 07 / IRQ 09 main-vs-sub clock-ratio subtests were measuring.)
+	if(ioctl_wr & bios_download) begin
 		if(ioctl_addr == 'h1F0) begin
 			if(ioctl_data[7:0] == "J") region_req <= 0;
 			else if(ioctl_data[7:0] == "U") region_req <= 1;
