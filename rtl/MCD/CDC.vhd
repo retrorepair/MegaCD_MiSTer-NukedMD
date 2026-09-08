@@ -298,7 +298,16 @@ begin
 						-- (mcd-verificator CDC REGS test 0C reads with AR = 0x12 and requires it
 						-- not to alias onto DBCL/DBCH).
 						if AR(4) = '1' then
-							DO <= x"00";
+							-- AR >= 16 selects no register, and reads back all-ones (open bus).
+							-- Two tests pin this value between them:
+							--   CDC REGS 0C  reads twice at AR=0x12 and requires "not 0x0095" then
+							--                "not 0x000A", so it can be neither those nor the stale
+							--                previous value (which would be 0x0A and fail the second).
+							--   CDC FLAGS 32 selects AR=0x0F and does TWO data-port reads; the first
+							--                takes STAT3 and leaves AR=0x10, so the second lands here,
+							--                and it requires bit 5 of the result to be SET.
+							-- 0xFF is the only value satisfying both.
+							DO <= x"FF";
 						end if;
 						-- Only a DATA-PORT access auto-increments.  Reading FF8005 (RS=0) returns the
 						-- address register itself and must leave it alone -- this increment used to sit
