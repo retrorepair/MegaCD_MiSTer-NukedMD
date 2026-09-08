@@ -55,3 +55,7 @@ sim/*/storage_manifest.txt
 sim/cdc/prg_bios.hex
 sim/cdc/68k_?code.txt
 sim/cdc/work/
+sim/cdc/irq/work*
+sim/cdc/irq/rtl_try
+sim/cdc/irq/transcript
+sim/cdc/irq/log_*.txt
