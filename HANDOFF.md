@@ -1627,3 +1627,35 @@ compromise that buys the most room is specifically **the die-derived NukedMD mod
 what makes this core 87%/94% and what puts every one of the worst 25 timing paths where nothing
 can be done about them. A behavioural VDP/68000/Z80 would free both the blocks and the 107 MHz
 critical path. Nothing else in this tree is close to that in cost.
+
+## An adversarial review of this session's own changes found two regressions
+
+Worth recording as a method as much as a result: after the fixes were on hardware and passing,
+a separate reviewer was asked to attack them rather than confirm them. It found two, one of them
+demonstrated in simulation.
+
+**1. Sync insertion could latch off for ever** (`CDC.vhd`). `SECTOR_ACTIVE` is set by any accepted
+CD word and was cleared only by the last word of a sector, so a stream that stopped part-way left
+it set: CD-DA paused off a 1176-word boundary, or a data burst cut short when the drive stopped.
+Sync insertion then never fired again and software waiting on DECI would wait for ever - the
+opposite of what the guard is for. Bounded by clearing it on `DEC_FRAME`, so it can suppress at
+most one insertion and a stalled stream self-heals. Bench: `DECI falling edges = 0 SYNC INSERTION
+IS DEAD` became `= 3 ... still alive`.
+
+**2. An auto-loaded cartridge followed you into the next game** (`MegaCD.sv`). "A cartridge is
+physical" is right for the OSD "Insert Cartridge" and wrong for `cart.rom` beside a CD image,
+which is part of that game's configuration. Load a game whose folder has one, then a game whose
+folder has none, and /CART stayed low and the machine booted the previous game's cartridge at
+000000. Now the two are tracked separately.
+
+Also confirmed sound by the review, with evidence: the edge-acknowledged INT2 (60 IFL2 pairs
+swept across the acknowledge window - 0 lost, 0 double-taken, exactly one `INT_ACK(2)` pulse per
+ISR entry), and the region change. It also corrected one of my numbers: the INT2 acknowledge
+window is **31-70 CLK (0.6-1.3 us)**, not the ~11 CLK the commit message claimed, so the race
+that fix closes was several times wider than stated.
+
+Left alone, with reasons: DBCH's top nibble now reads 0 rather than the upstream core's private
+"transfer finished" flag - that flag was never exposed on real silicon and the verificator
+requires 0, so the mask stays, but `DBC(15 downto 12)` is now written and never read and could
+go. And `region_req` (`MegaCD.sv`) still has no initialiser, so it powers up JP if a core ever
+runs without a BIOS being sent.
