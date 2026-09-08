@@ -295,9 +295,15 @@ begin
 						if AR(4) = '1' then
 							DO <= x"00";
 						end if;
-					end if;
-					if AR /= "00000" then
-						AR <= std_logic_vector( unsigned(AR) + 1 );
+						-- Only a DATA-PORT access auto-increments.  Reading FF8005 (RS=0) returns the
+						-- address register itself and must leave it alone -- this increment used to sit
+						-- outside the RS branch, so reading AR bumped AR.  mcd-verificator CDC REGS
+						-- sub-test 08 walks AR 1..0x1F reading FF8005 at every step to check it, so a
+						-- read that self-increments corrupts the very thing being measured.  (The write
+						-- path below already scoped this correctly.)
+						if AR /= "00000" then
+							AR <= std_logic_vector( unsigned(AR) + 1 );
+						end if;
 					end if;
 				end if;
 			end if;
