@@ -259,3 +259,15 @@ The 53.7 MHz failure is a **single** endpoint - `sdram|dout[11] -> ASIC|S68K_PRG
 -0.340 while the next worst sibling bit makes it at +0.254. Placement, not logic.
 
 md5 795743d7 (releases/MegaCD_TEST_NukedMD_b56_20260908.rbf).
+
+### Seed check (build 57, SEED 6, identical RTL to build 56)
+
+| clock | build 56 (SEED 4) | build 57 (SEED 6) |
+|---|---|---|
+| 107.4 MHz | **-1.550, TNS -342** | -1.959, TNS -1119 |
+| 53.7 MHz | -0.340, TNS -0.340 | **+0.082** |
+| HDMI PLL | -0.095 | -0.565, TNS -2.970 |
+
+SEED 6 closes the single SDRAM->ASIC path on 53.7 MHz but pays for it three times over on the
+107 MHz clock, which is the dominant one and the one carrying the die-derived models. SEED 4 is
+kept. Recorded so nobody re-runs this experiment.
