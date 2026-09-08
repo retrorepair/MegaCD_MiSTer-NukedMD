@@ -228,7 +228,13 @@ localparam CONF_STR = {
 
 reg tmss_enable = 0;  // TMSS option, latched at reset (logic further down)
 reg tmss_loaded = 0;  // boot2.rom received: enables the OSD entry (menumask bit 3)
-wire [15:0] status_menumask = {6'd0, en216p,region,!region,~gg_available,!gun_mode,tmss_loaded,~dbg_menu,1'b0,~bk_ena};
+// Bits 15:12 are spare. 11 and 10 are temporary instrumentation for the "Remove Cartridge &
+// Reset" bug: no CONF_STR h/H/d/D prefix references them, so they change nothing in the OSD, but
+// Main reads the whole mask every time it draws the menu, which makes them free to observe.
+// Remove both once R[37] is fixed.
+wire [15:0] status_menumask = {4'd0, dbg_cart_remove_seen, rom_cart_mode,
+                               en216p,region,!region,~gg_available,!gun_mode,tmss_loaded,~dbg_menu,1'b0,~bk_ena};
+reg dbg_cart_remove_seen = 0;   // sticky: the core sampled status[37] high at least once
 wire [127:0] status;
 wire  [1:0] buttons;
 wire [11:0] joystick_0,joystick_1,joystick_2,joystick_3,joystick_4;
@@ -1763,6 +1769,7 @@ always @(posedge clk_sys) begin
 	if(cart_remove) begin
 		rom_cart_mode <= 0;
 		cart_auto <= 0;
+		dbg_cart_remove_seen <= 1;   // instrumentation, see status_menumask
 	end
 end
 
