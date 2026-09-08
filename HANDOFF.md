@@ -1883,3 +1883,30 @@ screenshots with three different md5s, i.e. the BIOS is alive and animating thro
 only proves the BIOS is running - the JP BIOS waits on "press the start button" and the virtual
 keyboard is not mapped to a joypad, so the game itself was not driven. Testing gameplay needs
 either a real pad or a uinput device that MiSTer recognises as a joystick.
+
+## "Remove Cartridge & Reset": root-caused
+
+Instrumenting `rom_cart_mode` and a sticky "saw status[37]" flag onto spare `status_menumask`
+bits (10 and 11) split the problem in one build. Main reads the whole mask on every menu draw:
+
+    RTRACE bit=37 ... mask=053c (cartmode=1 removeseen=0)     before the OSD selection
+    RTRACE bit=37 ... mask=093c (cartmode=0 removeseen=1)     after it
+
+So `status[37]` arrives and `rom_cart_mode` clears exactly as written. Everything from the OSD
+row to the register is fine, and the fault is downstream.
+
+**`md_board` drives VD as a wired-OR** (`md_board.v:778-788`), and `mcd_cart`'s `cart_data_en`
+was `cart_oe & (cart_cs | data_en)` - gated on /CE0 alone, with no reference to whether a
+cartridge is present. With `rom_mode = 0` the module therefore still drove `cart_data` onto the
+bus. From power-up that is invisible: `cart_data` is still zero and ORing zero changes nothing,
+which is exactly why an empty slot has always booted correctly and why this bug hid. Once a
+cartridge has been loaded, `cart_data` holds real cartridge data and corrupts every read the
+Mega CD answers - so the machine resets, reads a corrupted vector and comes back up on the
+cartridge.
+
+Fixed by gating the /CE0 term: in ROM mode the cartridge owns the cycle, and without one only the
+RAM cartridge's own windows (already `~rom_mode`-gated) may drive.
+
+This also explains why it looked verified earlier in the session: with a cartridge inserted the
+machine boots the cartridge either way, and Alien 3's own Sega licence screen looks like the
+Mega CD BIOS start-up at a glance.
