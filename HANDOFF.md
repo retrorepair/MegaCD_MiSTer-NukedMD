@@ -1196,3 +1196,32 @@ gone, DMA2 fixed, REGS/FLAGS/DMA3 all advancing), so the right split is:
   1. keep the CDC fixes,
   2. treat timing closure as its own piece of work (it also gates IRQ 0A, whose INT2 service
      latency measured 5.94 us on hardware against a ~7-8 us window - i.e. also margin-limited).
+
+## Build 50: CDC DMA3 PASSES (3/3 runs). Telemetry off to make the design fit.
+
+Build 49 failed outright: `Error (11802): Can't fit design in device` at 88% ALM / 94% RAM
+blocks. The six CDC fixes tipped an already-full Cyclone V over the edge. `MCD_TELEMETRY` is
+now commented out in MegaCD.qsf (it costs a 32x32 ring buffer, a capture FIFO and a stack of
+32-bit counters); re-enable it when live HPS-side measurement is needed. Build 50 fits at 84%
+ALM, and `pll_hdmi` recovered to +0.163 while counter[1] improved to -0.139 (still negative).
+
+| test | b43/44 (start) | b45 | b46 | **b50 (3 runs)** |
+|---|---|---|---|---|
+| VAR TESTS | OK | OK | 02 | 02 (timing) |
+| IRQ TEST | 0A | 0A | 09 | 09 (timing) |
+| REG 8030 | OK | OK | 07 | 07 (timing) |
+| CDC REGS | 01 | 01 | 08 | **0B** |
+| CDC INIT | OK (jitter) | OK | OK | **OK, stable 3/3** |
+| CDC FLAGS | 05 | 12 | 32 | 32 |
+| CDC DMA2 | 05 | **OK** | OK | **OK** |
+| CDC DMA3 | 01 | 50 / HANG | 60 | **OK** |
+| CDC DMA1 | OK | OK | OK | OK |
+
+**CDC DMA3 passes on all three runs** - the host-data-write fix closed sub-test 0x60, the last
+thing in its way. DMA2 stays green. CDC INIT no longer jitters. So two of the five original
+errors are fixed outright and the CDC DMA path is fully clean (DMA1/DMA2/DMA3/INIT all OK).
+
+Remaining, and now clearly separated by cause:
+- **CDC REGS 0B, CDC FLAGS 32** - real logic, specs already decoded (see below).
+- **VAR 02, IRQ 09, REG 8030 07** - narrow-band timing measurements; will not respond to CDC
+  work. Gated on timing//capacity, not accuracy.

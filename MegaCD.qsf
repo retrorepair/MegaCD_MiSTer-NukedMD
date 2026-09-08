@@ -61,7 +61,10 @@ source sys/sys.tcl
 source sys/sys_analog.tcl
 source files.qip
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
-set_global_assignment -name VERILOG_MACRO "MCD_TELEMETRY=1"
+# MCD_TELEMETRY costs ~a ring buffer + FIFO + many 32-bit counters.  Build 49 hit
+# "Can.t fit design in device" at 88% ALM / 94% RAM blocks, so it is off by default;
+# re-enable it when live HPS-side measurement is needed (tools/mcd_telemetry.py).
+#set_global_assignment -name VERILOG_MACRO "MCD_TELEMETRY=1"
 set_global_assignment -name VERILOG_MACRO "NUKED_RTL_FM=1"
 set_global_assignment -name VERILOG_MACRO "NUKED_RTL_STAGE1=1"
 set_global_assignment -name VERILOG_MACRO "NUKED_RTL_Z80=1"
