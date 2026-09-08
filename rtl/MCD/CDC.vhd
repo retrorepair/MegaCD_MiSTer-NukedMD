@@ -373,6 +373,15 @@ begin
 			-- stays low, and the free-running 75 Hz interrupt continues as before.  (It is a flag
 			-- rather than "WORD_CNT /= 0" so this path is one flip-flop, not an 11-bit compare
 			-- feeding DECI -> CDC_INT_N -> the ASIC's INT_PEND(5) on the 53.7 MHz clock.)
+			-- The guard must expire.  A sector that stops part-way - CD-DA paused off a 1176-word
+			-- boundary, a data burst cut short by the drive stopping - would otherwise leave
+			-- SECTOR_ACTIVE set for ever and sync insertion would never fire again, which is the
+			-- opposite of what it is for: software waiting on DECI would wait for ever.  Real
+			-- silicon has no such latch; its frame counter free-runs, so any "a sector is coming"
+			-- condition expires within a frame.  Clearing on DEC_FRAME bounds this one the same
+			-- way: it can suppress at most one insertion, and a stalled stream self-heals on the
+			-- next frame.  A word arriving in the same cycle wins, because the WORD_CNT block
+			-- below assigns SECTOR_ACTIVE later in this process.
 			if CTRL0(DECEN) = '0' then
 				IFSTAT(DECI) <= '1';
 				STAT3(VALST) <= '1';
@@ -382,6 +391,9 @@ begin
 			elsif DEC_MID = '1' then
 				IFSTAT(DECI) <= '1';
 				STAT3(VALST) <= '1';
+			end if;
+			if DEC_FRAME = '1' then
+				SECTOR_ACTIVE <= '0';   -- the guard lasts one frame, never longer
 			end if;
 			if EN = '1' then
 				if REG_WR = '1' then

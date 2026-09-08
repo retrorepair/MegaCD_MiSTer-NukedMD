@@ -1742,12 +1742,28 @@ end
 // powers up at 0 and loading a core reconfigures the FPGA, so a fresh session always starts
 // with an empty slot without needing a BIOS download to clear it.
 
+// A cartridge arrives two ways and they are not the same thing. The OSD "Insert Cartridge" is
+// somebody putting a cartridge in the slot: physical, so it survives a reset and a disc change
+// and only "Remove Cartridge & Reset" takes it out. `cart.rom` sitting next to a CD image is
+// part of THAT game's configuration (Pier Solar), loaded automatically when the game is; letting
+// that one stick would carry it into the next game, whose folder has no cart.rom - the machine
+// would boot the previous game's cartridge at 000000 instead of the new CD. So an automatic
+// cartridge is cleared when a BIOS is loaded, as it always was, and a manual one is not.
 reg rom_cart_mode = 0;
+reg cart_auto = 0;      // this cartridge came from cart.rom beside the disc, not from the OSD
 always @(posedge clk_sys) begin
-	reg old_cart_dl;
+	reg old_cart_dl, old_bios_dl;
 	old_cart_dl <= cart_download;
-	if(~old_cart_dl & cart_download) rom_cart_mode <= 1;
-	if(cart_remove) rom_cart_mode <= 0;
+	old_bios_dl <= bios_download;
+	if(~old_cart_dl & cart_download) begin
+		rom_cart_mode <= 1;
+		cart_auto <= ioctl_index[7:6] == 2'b01;   // 40/41 = cart.rom next to the CD
+	end
+	if(~old_bios_dl & bios_download & cart_auto) rom_cart_mode <= 0;
+	if(cart_remove) begin
+		rom_cart_mode <= 0;
+		cart_auto <= 0;
+	end
 end
 
 ///////////////////////////////////////////////
