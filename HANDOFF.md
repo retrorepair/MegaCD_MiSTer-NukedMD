@@ -1864,3 +1864,22 @@ with no latching at reset. Candidates, in the order I would try them:
 56. Note that on build 58 `R[0]` deliberately no longer clears a manually inserted cartridge, so
 **on build 58 there is currently no working way to remove one** - which makes fixing `R[37]` the
 top open item, ahead of anything else in this file.
+
+## The sync-insertion latch was seen on hardware, not just in simulation
+
+The user reported Thunder Storm FX **frozen** on the machine. It had been left running on build 56,
+which carries the `SECTOR_ACTIVE` latch introduced earlier in this session (f6afa27/58d12d5) and
+fixed in build 58 (090924c). That is exactly the failure the latch produces: a CD stream that
+stops part-way leaves the flag set, sync insertion never fires again, and anything waiting on
+DECI or STAT3(VALST) waits for ever.
+
+So the review's simulation finding was not theoretical - it hung a real game on real hardware
+within a couple of hours of the build being written. Worth remembering as an argument for the
+adversarial review pass, and as a caution about how much a "small, obviously correct" guard can
+cost when it has no timeout.
+
+Build 58 re-check: Thunder Storm FX loaded and left alone for three minutes gives three
+screenshots with three different md5s, i.e. the BIOS is alive and animating throughout. Note this
+only proves the BIOS is running - the JP BIOS waits on "press the start button" and the virtual
+keyboard is not mapped to a joypad, so the game itself was not driven. Testing gameplay needs
+either a real pad or a uinput device that MiSTer recognises as a joystick.
