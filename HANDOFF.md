@@ -1116,3 +1116,41 @@ without touching logic; -2.1 ns on the 107 MHz clock will not be fixed by a seed
 
 **Do not attribute VAR 02 / REG 8030 07 to the CDC changes without re-testing on a build whose
 `counter[1]` is positive.** If a seed recovers them, they were fitting collateral.
+
+## VAR TESTS 02 and REG 8030 07 are TIMING measurements - decoded, with their ranges
+
+Both print a measured count and accept only a narrow band. Neither compares a register value,
+and in both cases the earlier sub-tests (which do check values) pass. So a build that fails
+these has a timing problem, not a logic one.
+
+**VAR TESTS 02** (ROM 0x189BC..0x1899FE). Issues sub-CPU RPC command 5 (a 65536-iteration word
+read loop at 0x080000, sub ROM 0x1556) and counts main-CPU polls of A12020 until the sub goes
+idle:
+```
+0189f2  addi.l #$FFFFA337,d1   ; count - 23753
+0189f8  cmpi.l #$E3,d1         ; 227
+0189fe  bhi -> fail, print count, error 02
+```
+accepted **23753..23980** (0.96% wide). Sub-test 03 is the same against 0xFF8000, same bounds.
+
+**REG 8030 07** (ROM 0x187A6..0x187FA). Sets TIMER (FF8030) = 255, syncs on a level-3 interrupt,
+then counts main-CPU polls of A12026 across one whole timer period (256 x 30.72 us = 7.86 ms):
+```
+0187f0  addi.l #$FFFFFAFA,d0   ; count - 1286
+0187f6  moveq #$2,d1           ; bound 2
+0187fa  bcs -> fail, print count, error 07
+```
+accepted **1286..1288 - three values, 0.16% tolerance**. (Sub-test 08 re-writes TIMER mid-period
+and accepts 1283..1290, checking that a write does not reload a running counter.  REG 8030 does
+NOT use the stop watch; A1200C is covered by "REG X00C" at 0x188AE.)
+
+**Measured on build 46: VAR 23608..23732 (0.09-0.6% low), REG 8030 1274..1275 (~0.9% low).**
+Both UNDERSHOOT, i.e. each main-CPU poll iteration takes ~0.9% LONGER than on real hardware -
+the poll loop is 46 cycles, so this is a fraction of a wait state per gate-array read. Build 45
+passed both; build 46 differs only in a handful of CDC lines plus a fitter run that took
+counter[1] from +0.103 to -0.218. A late DTACK on the A12020/A12026 read path inserts a whole
+68000 wait state, which is exactly this size of error.
+
+**So these two are not fixable by CDC logic changes.** They need either timing closure on
+counter[1] or a genuinely faster main-CPU gate-array read acknowledge. SEED 7 was tried and is
+far worse (107 MHz -2.829, counter[1] -1.094), so seed roulette is not the answer either.
