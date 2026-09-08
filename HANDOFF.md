@@ -1225,3 +1225,71 @@ Remaining, and now clearly separated by cause:
 - **CDC REGS 0B, CDC FLAGS 32** - real logic, specs already decoded (see below).
 - **VAR 02, IRQ 09, REG 8030 07** - narrow-band timing measurements; will not respond to CDC
   work. Gated on timing//capacity, not accuracy.
+
+## Build 51 + NTSC: a full pass, and the three "timing" failures explained
+
+**Build 51 produced the first clean sweep this project has seen** - every mcd-verificator test
+OK, IRQ TEST included (run 4 of 4 below). The other runs differ only in the two remaining
+*intermittent* failures, so the core is now correctness-complete on this ROM and what is left
+is margin, not logic.
+
+| run | result |
+|---|---|
+| 1 | all OK except `IRQ TEST 0A` |
+| 2 | `IRQ TEST 0A` + `CDC INIT 03` (the run aborts at CDC INIT) |
+| 3 | as run 2 |
+| 4 | **everything OK** |
+
+Fixes in build 51 on top of build 50: DBCH reads back 4 bits, FF8006's word read no longer
+returns a stale high byte, and an unimplemented CDC register (AR >= 16) reads back 0xFF rather
+than 0x00. Those closed `CDC REGS 0B` and `CDC FLAGS 32`.
+
+### VAR 02 / REG 8030 07 / IRQ 09 were never CDC bugs - the console was running PAL
+
+All three are main-clock / sub-clock *ratio* measurements with a software counter on one side
+(ROM 0x0189CA, 0x0187A6, 0x018376):
+
+| test | counts | window |
+|---|---|---|
+| VAR 02 | main polls of A12020 while the sub does 65536 word-RAM reads | 23753..23980 |
+| REG 8030 07 | main polls of A12026 across one Timer W period (7.864 ms) | 1286..1288 |
+| IRQ 09 | sub level-3 IRQs during a fixed 1024-iteration main loop | 224..226 |
+
+The CD block is a fixed 12.5 MHz in both regions (`mcd_cegen` compensates `IN_CLK`,
+`MegaCD.sv:831`), but the main 68000 is VCLK/7 off `clk_sys`: 7.670454 MHz NTSC,
+7.600489 MHz PAL - a ratio of 0.990879. That predicts 23648 / 1275.3 / 227.1 against
+measurements of 23608..23732 / 1274..1275 / 227..228 - all three, including IRQ 09's opposite
+sign, inside the run-to-run jitter. An audit of every divider in `rtl/MCD` found none off by
+even 0.01%; the whole discrepancy is the PAL console clock.
+
+Region came from header byte $1F0 during `rom_download`. Upstream that meant the BIOS alone;
+here `rom_download` had grown to `bios_download | cart_download` when the cartridge slot was
+added, so `mcd-verificator.bin`'s 'W' header overwrote the BIOS's 'U' and forced EU/PAL.
+Commit f4d1a6c sniffs `bios_download` only - the video standard is the console's, not the
+cartridge's. Confirmed before the fix was written by pressing F2 (the core's force-US hotkey)
+on a running build 50: VAR TESTS and REG 8030 turned OK and IRQ moved from 09 to 0A.
+
+### What is left
+
+- **`IRQ TEST 0A`** - intermittent. The sub-CPU has 52 main clocks = 6779 ns (NTSC) from the
+  arming write at A12000 to the read of A12026, and must fit a whole level-2 exception in it,
+  256 times running. Hardware telemetry measured our INT2 response at 5.94 us mean, so the
+  mean passes and the tail does not. Prime suspect: `ASIC.vhd:2576-2591` terminates the sub's
+  interrupt-acknowledge cycle with **/VPA**, so the gate-level 68000 runs a 6800-style
+  E-clock-synchronised autovector cycle (~10-19 clocks, ~720 ns of phase jitter) instead of the
+  4-clock DTACK cycle the MC68000UM's "Interrupt 44(5/3)" assumes. Whether real hardware
+  asserts /VPA there is being checked; do not change it without evidence.
+- **`CDC INIT 03`** - intermittent, long-standing.
+- Both are margin symptoms and the design sits at about -2.1 ns on the 107 MHz clock, so
+  timing closure is now the highest-value work.
+
+### Remote-control tooling (new)
+
+`tools/mister/uinput_kbd.py` runs on the MiSTer and synthesises keystrokes through /dev/uinput;
+MiSTer's inotify watch on /dev/input picks the device up with no restart. Run it once with
+`--daemon` (it holds the device open and reads key names from /tmp/mister_kbd) and drive it with
+`--send osd up up enter`; creating the device per keypress races MiSTer's device-open path and
+loses keys. `tools/mister/osd.py` holds the OSD selection indices derived from Main's menu.cpp -
+note the OSD is composited after the scaler, so it can never appear in a screenshot and must be
+driven blind; the bottom four items are reachable with 1-4 UP presses because the selection wraps.
+`tools/mister/verif_loop.sh` runs the verificator N times and md5-groups the result screens.
