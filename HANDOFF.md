@@ -1519,3 +1519,37 @@ Loaded the verificator MGL (disc + the verificator as a cartridge), then selecte
   no-disc path it has to leave alone.
 - The run came back PAL (VAR 23732 / IRQ 227 / REG 8030 1275), because `mcd_set_image(0, "")`
   reloads the fallback `cifs/MegaCD/boot.rom`, which is the 'E' BIOS. Also correct.
+
+## Build 56: best 107 MHz timing yet, and where the failing paths actually are
+
+| clock | build 52 | build 54 | build 56 |
+|---|---|---|---|
+| 107.4 MHz (`counter[0]`) | -1.694, TNS -664 | -2.339, TNS -1784 | **-1.550, TNS -342** |
+| 53.7 MHz (`counter[1]`) | +0.121 | -0.081 | -0.340, TNS -0.340 |
+
+`quartus_sta` with `tools/sta_paths.tcl` finally says where the 107 MHz failures are, and it is
+**not** anything writable here: every one of the worst 25 is inside a die-derived model -
+
+    ym7101_rtl|io_address[1]  ->  md_board|VD[4]        (the VDP driving the video data bus)
+    m68kcpu:P68K|w23~0_OTERM341DUPLICATE -> P68K|w981[1] (the gate-level sub-CPU)
+
+Those are 1:1 conversions of die netlists and are not ours to restructure, so the 107 MHz slack
+is a property of running gate-level models at 107 MHz on a Cyclone V, not a bug to fix. It has
+been in this range for every build of this configuration.
+
+The 53.7 MHz failure is a **single** endpoint:
+
+    sdram|dout[11]  ->  ASIC|S68K_PRGRAM_DO[11]     -0.340
+    sdram|dout[8]   ->  ASIC|M68K_PRGRAM_DO[8]      +0.254   (next worst - a placement outlier)
+
+i.e. the SDRAM read bus into the ASIC's PRG-RAM data register, missing by a third of a
+nanosecond while its sibling bits make it comfortably. Placement, not logic. `SECTOR_ACTIVE`
+(58d12d5) was still the right shape for the sync-insertion guard - one flip-flop rather than an
+11-bit compare in DECI -> CDC_INT_N -> INT_PEND(5) - but it was not what made 53.7 MHz negative.
+
+### Games still run (build 54, after the CDC decoder-interrupt change)
+
+The sync-insertion guard changes when DECI fires, which is the most game-critical path touched
+in this session, so: Cobra Command (FMV playing), Final Fight CD and 3 Ninjas Kick Back all boot
+and run. Thunder Storm FX comes up on the JP BIOS "press the start button" screen, which is that
+BIOS waiting for input rather than a fault.
