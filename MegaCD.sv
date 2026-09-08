@@ -410,6 +410,7 @@ wire loading = rom_download | bk_loading | RESET | cart_clearing; // the cartrid
 
 reg        btn_reset;
 reg        md_reset;
+reg        ram_clear;
 reg        s_reset;
 reg [15:1] ram_rst_a;
 always @(posedge clk_md) begin
@@ -424,20 +425,26 @@ always @(posedge clk_md) begin
 
 	s_reset <= (cnt < 3);
 
-	// Every reset source drives the FULL reset (md_reset), not just btn_reset.  On the Mega CD a
-	// reset must reset the whole machine together - the FC1004 gate array (SRES), the VDP, and
-	// both 68000s - in the cold-boot order (MCD up first, main CPU released after), because a
-	// cartridge cannot be hot-removed and the reset button on real hardware power-resets both the
-	// console and the CD unit.  btn_reset alone gives the main 68000 only a ~17 us warm pulse via
-	// the FC1004 WRES pin and leaves SRES low: the VDP keeps its last frame, the gate-array decode
-	// latches keep stale state, and the CPU restarts before the MCD is up.  Confirmed on hardware:
-	// a warm-only reset FROZE both "Remove Cartridge & Reset" (stale Alien 3 frame, no drive poll)
-	// and the standalone "Reset" (Cobra frozen mid-FMV).  Driving md_reset - exactly what a cold
-	// boot / BIOS download does through `loading` - gives SRES and the right ordering, so any reset
-	// (R[1] Reset, R[37] Remove Cartridge, R[0]-part host_reset, the user button, a region change)
-	// lands cleanly on the BIOS.
+	// Every reset source drives the FULL CHIP reset (md_reset), not just btn_reset.  On the Mega CD
+	// a reset must reset the whole machine together - the FC1004 gate array (SRES), the VDP, and
+	// both 68000s - because the reset line is shared between the console and the CD unit; btn_reset
+	// alone gives the main 68000 only a ~17 us warm pulse via the FC1004 WRES pin and leaves SRES
+	// low, so the VDP keeps its last frame, the gate-array decode latches keep stale state, and the
+	// CPU restarts before the CD ASIC's ROM path is up (on hardware the BIOS ROM is always readable;
+	// here it is served through the ASIC, so the ASIC must be up before the CPU's first fetch).
+	// Confirmed on hardware: a warm-only reset FROZE both "Remove Cartridge & Reset" (stale Alien 3
+	// frame, no drive poll) and the standalone "Reset" (Cobra frozen mid-FMV).
+	//
+	// BUT a reset must NOT clear work RAM - real hardware preserves DRAM across the reset pulse, and
+	// games like X-Men (MD cart) REQUIRE pressing reset to continue: their reset handler reads a
+	// flag left in work RAM.  So the RAM clear/Z80-C7 sweeps are gated on `ram_clear` (cold boot /
+	// BIOS download = `loading` only) while the chip reset `md_reset` fires on every reset edge.
 	if(loading | (~old_reset & reset)) md_reset <= 1;
 	else if(cnt == 3)                  md_reset <= 0;
+
+	// RAM clear sweep: cold boot / BIOS download only, so a plain reset preserves work RAM.
+	if(loading)       ram_clear <= 1;
+	else if(cnt == 3) ram_clear <= 0;
 
 	if(~old_reset & reset) btn_reset <= 1;
 	else if(&cnt)          btn_reset <= 0;
@@ -672,7 +679,7 @@ md_board md_board
 // porta_we_reg, -1.9 to -6.2 ns) and a lost byte write to work RAM hangs the BIOS. The 68000 holds
 // address and data for several MCLK cycles around the strobe, so the write side goes through a
 // register stage and is performed one MCLK (9.3 ns) later on port B; reads keep the direct
-// address on port A. During md_reset port B runs the RAM clear sweep as before.
+// address on port A. During ram_clear (cold boot / BIOS download only) port B runs the RAM clear sweep.
 reg [14:0] ram_68k_wa;
 reg [15:0] ram_68k_wd;
 reg  [1:0] ram_68k_wbe;
@@ -691,10 +698,10 @@ dpram #(15,16) ram_68k
 	.address_a(ram_68k_address),
 	.q_a(ram_68k_o),
 
-	.address_b(md_reset ? ram_rst_a : ram_68k_wa),
-	.data_b(md_reset ? 16'd0 : ram_68k_wd),
-	.byteena_b(md_reset ? 2'b11 : ram_68k_wbe),
-	.wren_b(md_reset | ram_68k_wwe)
+	.address_b(ram_clear ? ram_rst_a : ram_68k_wa),
+	.data_b(ram_clear ? 16'd0 : ram_68k_wd),
+	.byteena_b(ram_clear ? 2'b11 : ram_68k_wbe),
+	.wren_b(ram_clear | ram_68k_wwe)
 );
 
 dpram #(13,8) ram_z80k
@@ -707,7 +714,7 @@ dpram #(13,8) ram_z80k
 	.q_a(ram_z80_o),
 
 	.address_b(ram_rst_a[13:1]),
-	.wren_b(md_reset),
+	.wren_b(ram_clear),
 	.data_b(8'hC7) // reset instruction to fix Titan 2 bug
 );
 
