@@ -59,3 +59,5 @@ sim/cdc/irq/work*
 sim/cdc/irq/rtl_try
 sim/cdc/irq/transcript
 sim/cdc/irq/log_*.txt
+sim/cdc/irq/68k_*code.txt
+sim/cdc/irq/prg_bios.hex
