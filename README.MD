@@ -87,7 +87,8 @@ krikzz's hardware-validated Mega CD diagnostic, run on a real DE10-Nano.  Build 
 | CDC INIT | OK |
 | IRQ TEST | ERROR 0A |
 
-Known open bug: the OSD "Remove Cartridge & Reset" does not remove the cartridge. See HANDOFF.md.
+Known open bug: after the OSD "Remove Cartridge & Reset" the 68000 does not restart the Mega CD
+BIOS (the screen holds the last frame, or goes black); "Reset & Eject CD" recovers it. See HANDOFF.md.
 
 CDC INIT used to fail 62% of runs and is now 0 in 69; the CDC frame timer was expiring 27 ns
 before each sector arrived, so sync insertion fired on every normal frame and woke the sub CPU

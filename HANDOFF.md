@@ -2026,3 +2026,27 @@ path re-establishes - the ~100 ms `loading` hold, the download's own side effect
 re-sniffed, `ioctl_wr` traffic, the SDRAM write burst), or something Main does around it - is
 the thing `cart_remove` is missing. That is exactly the question the static reset audit and the
 sim bench are answering.
+
+### CORRECTION: it is ONE fault, not two. After R[37] the 68000 does not run the BIOS
+
+A temporary Main that logs every CDD command settles it. A live Mega CD BIOS polls the drive
+about 1000 times per 10 s; a dead 68000 issues only the one CDD 0xFF the core sends on the reset
+pulse itself. Counted in a 10 s window after "Remove Cartridge & Reset":
+
+| case | screen | CDD cmds / 10 s | verdict |
+|---|---|---|---|
+| plain BIOS boot (sanity) | Mega CD BIOS | **1004** | BIOS alive |
+| TMSS **on**, after R[37] | Alien 3 title, frozen | **1** | **68000 dead**, stale cartridge VRAM |
+| TMSS **off**, after R[37] | black | **1** | **68000 dead**, blank VRAM |
+| after R[0] (reset + BIOS reload) | Mega CD BIOS | **1005** | BIOS alive - recovered |
+
+So the "TMSS on maps the cartridge back" reading was wrong: `a1_t5` is the Alien 3 *title screen
+held in VRAM*, not a running cartridge. Both outcomes are the same machine - the 68000 is not
+executing after `cart_remove`'s reset - and TMSS only changes the leftover picture (the
+cartridge's last frame vs black). This also retires the FC1004 dff26 / CE0-ROM-remapping theory
+as the *cause*: nothing is fetching at all, so what 000000 decodes to is moot until the CPU runs.
+
+The single question is now fault 2's, and it applies to both TMSS settings: **why does the
+68000 not run after the ~13 ms `cart_remove` reset, when a cold boot with an empty slot does, and
+when only the ~100 ms BIOS-download reset recovers it?** That is exactly what the reset-state
+audit and the sim bench are chasing.
