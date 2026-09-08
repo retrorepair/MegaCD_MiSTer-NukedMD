@@ -349,32 +349,17 @@ always @(posedge clk_sys) begin
 end
 
 // Main sends boot.rom as index 00, cart.rom next to a CD as 40, boot2.rom (TMSS) as 80.
-// "Disc Insert: Keep Running" (test aid): Main re-sends the BIOS and pulses status[0] on every image
-// mount; with the option on, both are ignored once a BIOS is running, so a disc can be swapped
-// without restarting the core (as on hardware, where the BIOS notices the new disc through the CDD).
-// The OSD "Reset & Eject CD" is masked as well while it is on: use the main menu Reset instead.
-wire cd_keep      = status[36];
-reg  bios_loaded  = 0;
-wire bios_dl_raw  = ioctl_download & (ioctl_index[7:6] == 2'b00) & (ioctl_index[5:0] <= 6'h01);
-// Main's start-up sequence sends the BIOS, then resets the core (status[0] pulse) and sends the BIOS
-// once more; the BIOS needs that restart to come up after Main's drive is initialised (with the
-// pulse masked the JP BIOS stays on its intro clouds waiting for the drive). So the masking is armed
-// only 3 s after the first BIOS load: it then covers disc mounts done while a BIOS is running.
-reg [27:0] keep_arm_cnt = 0;
-reg        keep_armed = 0;
-wire keep_running = cd_keep & keep_armed;
-wire bios_download = bios_dl_raw & ~keep_running;
-wire host_reset    = status[0] & ~keep_running;
+//
+// "Disc Insert: Reset | Keep Running" (status[36]) is read by MAIN, not here.  It picks how
+// mcd_set_image() treats a disc change: restart the machine with the new game's BIOS, save and
+// cheats, or hot-swap the disc in the drive and let the running BIOS notice it through the CDD,
+// which is what a multi-disc game wants and what hardware does.  It used to be implemented on
+// this side by masking bios_download and status[0], which also silenced the OSD "Reset & Eject
+// CD" and left the previous game's BIOS running - so the option is gone from here and nothing
+// on this side is masked.  Every reset and every BIOS load now takes effect.
+wire bios_download = ioctl_download & (ioctl_index[7:6] == 2'b00) & (ioctl_index[5:0] <= 6'h01);
+wire host_reset    = status[0];
 wire cart_remove   = status[37];   // OSD "Remove Cartridge & Reset": clears the cart slot and resets, disc kept
-always @(posedge clk_sys) begin
-	reg old_dl;
-	old_dl <= bios_dl_raw;
-	if(old_dl & ~bios_dl_raw) bios_loaded <= 1;
-	if(bios_loaded & ~keep_armed) begin
-		keep_arm_cnt <= keep_arm_cnt + 1'd1;
-		if(keep_arm_cnt == 28'd161_000_000) keep_armed <= 1;   // 3 s at 53.7 MHz
-	end
-end
 wire cart_download = ioctl_download & ((ioctl_index[5:0] == 6'h06) | ((ioctl_index[7:6] == 2'b01) & (ioctl_index[5:0] <= 6'h01))); // OSD "Insert Cartridge" or cart.rom next to the CD
 wire tmss_download = ioctl_download & (ioctl_index == 8'h80);                                                                    // games/MegaCD/boot2.rom
 wire rom_download  = bios_download | cart_download;
