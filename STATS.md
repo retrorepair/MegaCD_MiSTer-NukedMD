@@ -193,3 +193,28 @@ Mega CD clock became region independent (build 30).
 
 Builds 12 and earlier ran the Mega CD block at 13.42 MHz (see HANDOFF); from build 17 it runs
 at 12.5 MHz, which is why the VAR count rose before the sub-CPU bus path was corrected.
+
+## Build 52 (2026-09-08) — region fix + the CDC register fixes; first fully-passing-capable core
+
+Same netlist configuration as build 40 (1:1 NukedMD RTL conversions, SEED 4), plus nine CDC/ASIC
+accuracy fixes and the region fix. `MCD_TELEMETRY` is **off**: with it on the design does not fit
+(build 49 hit "Can't fit design in device" at 88% ALM / 94% RAM).
+
+| Resource | Used | Available | |
+|---|---|---|---|
+| ALMs (logic utilization) | 36,064 | 41,910 | 86% |
+| Total registers | 51,958 | | |
+| M10K block RAM | 519 | 553 | 94% |
+| Block memory bits | 4,109,748 | 5,662,720 | 73% |
+| DSP blocks | 56 | 112 | 50% |
+
+Timing (slow 85C): **-1.694 @107 MHz (TNS -664), +0.121 @53.7 MHz**. That is the best 107 MHz
+figure this configuration has had — build 51 was -2.141 (TNS -889) and build 40 -1.971 (TNS -650)
+— and it came from the fitter, not from a settings change: the QSF is unchanged (SEED 4,
+AGGRESSIVE PERFORMANCE, PHYSICAL_SYNTHESIS EXTRA). Seed sensitivity remains large; treat any
+single build's slack as a sample, not a measurement.
+
+RAM is the binding constraint at 94%, not logic. That is what killed the telemetry build, and it
+is what any future addition has to fit inside.
+
+md5 18545bed (releases/MegaCD_TEST_NukedMD_b52_20260908.rbf).
