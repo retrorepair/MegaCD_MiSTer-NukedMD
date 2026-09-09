@@ -2397,3 +2397,25 @@ drop keys (five UPs left the cursor on "Insert Disk" once); when a result hinges
 selected, have the owner select it, or verify from the log (an R[0] unloads the disc - `ld=0`,
 `Eject image` - an R[1] does not).  `uniq -c | head` on a trace can hide the interesting part behind
 hundreds of pre-event polls - anchor on the event line first.
+
+## 2026-09-09 hotfix: Main seek-latency rule reverted (The Amazing Spider-Man froze on level select)
+
+The release Main df2f120f carried a stricter SeekToLBA rule (force latency 12 unless the drive is
+already in PLAY/SEEK/SCAN; added 2026-09-08 while chasing the warm-reset boot read).  Owner, next
+morning: The Amazing Spider-Man froze on its level select - never before in the history of this core -
+while the b65/b66 rbfs run it fine; the release rbf is byte-identical to b65, so the Main was the
+regression.  Reverted to exact Genesis Plus GX (`if (!latency) latency = 12;`): retrorepair/Main_MiSTer
+7c60963 = md5 92c58935, deployed to the MiSTer and copied to releases/main_mister/MiSTer.  The
+disc-insert tray-close change is unaffected; the reverted rule had not fixed the warm reset anyway.
+The pre-session Main (7f4bed06) is still on the MiSTer as /media/fat/MiSTer.bak_isokeep.
+Spider-Man re-test after the revert: owner to confirm.
+
+Lesson: a change to the CD drive's seek/play latency touches EVERY game's disc access; do not ship one
+on the strength of one title's boot sequence.  Any future latency change needs a regression pass over
+seek-heavy titles (Spider-Man level select, the Wolf Team games the GPGX comment lists) first.
+
+The read-only root-cause workflow (megacd-warm-reset-root-cause: CDC-model / gate-array / telemetry
+lenses + synthesis) launched at the end of 2026-09-08 died on the session token limit - all four
+agents, no output.  Script kept at
+C:\Users\joelw\.claude\projects\C--Users-joelw-Documents-MegaCD-MiSTer-New-MegaCD-MiSTer-master\2ec3372d-bd5a-402d-ac38-21cf2da5ce03\workflows\scripts\megacd-warm-reset-root-cause-wf_837ad374-175.js
+and re-launched 2026-09-09; its synthesis is appended below if it completed.
